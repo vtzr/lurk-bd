@@ -55,7 +55,7 @@ const CHANGELOG = [
   { version: "2.13.0", items: [
     ["new", "Botão direito num canal, categoria ou servidor › Ignorar no Lurk: o Lurk para de registrar tudo que acontece ali, como mensagens, apagadas, editadas, menções, palavras-chave, digitação e calls. O que já tinha sido salvo continua. A lista fica em Ajustes › Ignorados.", "Right-click a channel, category or server › Ignore in Lurk: Lurk stops logging everything that happens there, like messages, deletes, edits, mentions, keywords, typing and calls. What was already saved stays. The list is in Settings › Ignored."],
     ["improved", "Grupos ignorados agora também deixam de registrar mensagens dos VIPs, apagadas e menções, e não só o digitou e apagou.", "Ignored groups now also stop logging VIP messages, deletes and mentions, not just typed & quit."],
-    ["improved", "\"Amigos\" agora se chama \"Solicitações\" e tem uma busca por nome ou @ nos novos pedidos e em quem te removeu.", "\"Friends\" is now called \"Requests\" and has a search by name or @ in new requests and in who removed you."],
+    ["improved", "\"Amigos\" agora se chama \"Solicitações\" e tem uma busca por nome ou @ nos novos pedidos, no Spam e em quem te removeu.", "\"Friends\" is now called \"Requests\" and has a search by name or @ in new requests, Spam and who removed you."],
   ] },
   { version: "2.12.0", items: [
     ["new", "Lista VIP: novo aviso \"Entrar ou sair de um servidor em comum\", desligado por padrão. As entradas e saídas aparecem no Histórico VIP › Perfil com o servidor, a entrada, a saída e quanto tempo a pessoa ficou.", "VIP list: a new \"They join or leave a shared server\" alert, off by default. Joins and leaves show up in VIP history › Profile with the server, when they joined, when they left and how long they stayed."],
@@ -4361,7 +4361,7 @@ function FriendsScreen({ tab: initialTab }) {
         : query && filtered.length ? h(Empty, { icon: "search", title: L("Ninguém encontrado", "No one found") }, L(`Nenhum pedido com "${q.trim()}".`, `No requests matching "${q.trim()}".`))
         : pending.length ? h(Empty, { icon: "search", title: L("Nenhum pedido neste filtro", "No requests match this filter") }, rf === "mutual" || rf === "bot" ? L("Amigos em comum e possíveis bots aparecem conforme os perfis carregam, enquanto você rola a lista.", "Mutual friends and possible bots show up as profiles load while you scroll the list.") : null)
         : h(Empty, { icon: "personBell", title: L("Nenhum pedido pendente", "No pending requests") }, L("Quando alguém te mandar um pedido de amizade, aparece aqui.", "When someone sends you a friend request, it shows up here.")),
-      bots.length && !bulk.running ? h(Group, { footer: L("Só conta quem já teve o perfil carregado.", "Only counts people whose profile has loaded.") }, h(NavRow, { title: L(`Recusar todos os possíveis bots (${bots.length})`, `Decline all possible bots (${bots.length})`), danger: true, onClick: () => confirmBulk(bots.map((r) => r.id), "bots", L("Recusar possíveis bots", "Decline possible bots")) })) : null,
+      bots.length && !bulk.running && !query ? h(Group, { footer: L("Só conta quem já teve o perfil carregado.", "Only counts people whose profile has loaded.") }, h(NavRow, { title: L(`Recusar todos os possíveis bots (${bots.length})`, `Decline all possible bots (${bots.length})`), danger: true, onClick: () => confirmBulk(bots.map((r) => r.id), "bots", L("Recusar possíveis bots", "Decline possible bots")) })) : null,
       null)
     : h(React.Fragment, null,
       removed.length ? h(Group, null, removed.map((r, i) => h(RemovedRow, { key: `${r.userId}-${r.at}-${i}`, r, isNew: r.at > seen.rem })))
@@ -4371,12 +4371,17 @@ function FriendsScreen({ tab: initialTab }) {
 }
 function SpamListScreen() {
   useBus(friendsBus, settingsBus);
+  const [q, setQ] = useNavState("q", "");
+  const query = normalize(q.trim());
   const spam = friendRequests().filter((r) => r.spam);
+  const shown = spam.filter((r) => !query || normalize(`${nameOf(r.id, r)} ${usernameOf(r.id) || r.username || ""}`).includes(query));
   return h(React.Fragment, null,
     h(LargeTitle, { title: "Spam", subtitle: L("Pedidos pendentes escondidos pelo filtro anti-spam", "Pending requests hidden by the spam filter") }),
     h(BulkProgress),
-    spam.length && !bulk.running ? h(Group, null, h(NavRow, { title: L(`Recusar todos (${spam.length})`, `Decline all (${spam.length})`), danger: true, onClick: () => confirmBulk(spam.map((r) => r.id), "spam", L("Recusar todo o Spam", "Decline all of Spam")) })) : null,
-    spam.length ? h(Group, null, spam.map((r) => h(RequestRow, { key: r.id, r, isNew: false, showSpamWhy: true })))
+    spam.length ? h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome ou @", "Search by name or @") }) : null,
+    spam.length && !bulk.running && !query ? h(Group, null, h(NavRow, { title: L(`Recusar todos (${spam.length})`, `Decline all (${spam.length})`), danger: true, onClick: () => confirmBulk(spam.map((r) => r.id), "spam", L("Recusar todo o Spam", "Decline all of Spam")) })) : null,
+    shown.length ? h(Group, null, shown.map((r) => h(RequestRow, { key: r.id, r, isNew: false, showSpamWhy: true })))
+      : spam.length ? h(Empty, { icon: "search", title: L("Ninguém encontrado", "No one found") }, L(`Nenhum pedido com "${q.trim()}" no Spam.`, `No requests matching "${q.trim()}" in Spam.`))
       : h(Empty, { icon: "shield", title: L("Nada no spam", "Nothing in spam") }));
 }
 function SpamFilterScreen() {
