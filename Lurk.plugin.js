@@ -55,6 +55,7 @@ const CHANGELOG = [
   { version: "2.13.0", items: [
     ["new", "Botão direito num canal, categoria ou servidor › Ignorar no Lurk: o Lurk para de registrar tudo que acontece ali, como mensagens, apagadas, editadas, menções, palavras-chave, digitação e calls. O que já tinha sido salvo continua. A lista fica em Ajustes › Ignorados.", "Right-click a channel, category or server › Ignore in Lurk: Lurk stops logging everything that happens there, like messages, deletes, edits, mentions, keywords, typing and calls. What was already saved stays. The list is in Settings › Ignored."],
     ["improved", "Grupos ignorados agora também deixam de registrar mensagens dos VIPs, apagadas e menções, e não só o digitou e apagou.", "Ignored groups now also stop logging VIP messages, deletes and mentions, not just typed & quit."],
+    ["improved", "\"Amigos\" agora se chama \"Solicitações\" e tem uma busca por nome ou @ nos novos pedidos e em quem te removeu.", "\"Friends\" is now called \"Requests\" and has a search by name or @ in new requests and in who removed you."],
   ] },
   { version: "2.12.0", items: [
     ["new", "Lista VIP: novo aviso \"Entrar ou sair de um servidor em comum\", desligado por padrão. As entradas e saídas aparecem no Histórico VIP › Perfil com o servidor, a entrada, a saída e quanto tempo a pessoa ficou.", "VIP list: a new \"They join or leave a shared server\" alert, off by default. Joins and leaves show up in VIP history › Profile with the server, when they joined, when they left and how long they stayed."],
@@ -3771,7 +3772,7 @@ function useNavState(key, init) {
 
 const NAMES = {
   home: () => L("Hoje", "Today"),
-  friends: () => L("Amigos", "Friends"),
+  friends: () => L("Solicitações", "Requests"),
   spamFilter: () => L("Filtro anti-spam", "Spam filter"),
   spam: () => "Spam",
   typing: () => L("Digitou e apagou", "Typed & quit"),
@@ -4324,26 +4325,32 @@ function FriendsScreen({ tab: initialTab }) {
   const [seen] = React.useState(() => ({ req: getReqSeen(), rem: getRemovedSeen() }));
   const [tab, setTab] = useNavState("tab", initialTab || "requests");
   const [rf, setRf] = useNavState("rf", "all");
+  const [q, setQ] = useNavState("q", "");
+  const query = normalize(q.trim());
+  const matches = (id, x) => !query || normalize(`${nameOf(id, x || {})} ${usernameOf(id) || x?.username || ""}`).includes(query);
   const [opened, setOpened] = React.useState(() => new Set([tab]));
   React.useEffect(() => { if (tab === "requests") markReqSeen(); else markRemovedSeen(); setOpened((o) => new Set([...o, tab])); }, [tab]);
   if (!getSettings().friendsEnabled) {
     return h(React.Fragment, null, h(LargeTitle, { title: NAMES.friends() }),
-      h(Group, null, h(NavRow, { icon: "personBell", color: "#34c759", title: L("Ativar Amigos", "Turn on Friends"), onClick: () => nav.push({ type: "settingsPage", id: "friends" }) })));
+      h(Group, null, h(NavRow, { icon: "personBell", color: "#34c759", title: L("Ativar Solicitações", "Turn on Requests"), onClick: () => nav.push({ type: "settingsPage", id: "friends" }) })));
   }
   const all = friendRequests();
   const pending = all.filter((r) => !r.spam);
   const filters = { all: () => true, mutual: (r) => (r.prof.mutualFriends || 0) > 0, fresh: (r) => r.fresh, bot: (r) => r.bot };
   const counts = Object.fromEntries(Object.entries(filters).map(([key, f]) => [key, pending.filter(f).length]));
-  const shown = pending.filter(filters[rf] || filters.all);
+  const filtered = pending.filter(filters[rf] || filters.all);
+  const shown = filtered.filter((r) => matches(r.id, r));
   const bots = pending.filter((r) => r.bot);
   const spam = all.filter((r) => r.spam);
-  const removed = getRemovedFriends();
+  const removedAll = getRemovedFriends();
+  const removed = removedAll.filter((r) => matches(r.userId, r));
   const newReq = opened.has("requests") ? 0 : shown.filter((r) => r.sentAt > seen.req).length;
-  const newRem = opened.has("removed") ? 0 : removed.filter((r) => r.at > seen.rem).length;
+  const newRem = opened.has("removed") ? 0 : removedAll.filter((r) => r.at > seen.rem).length;
   const rules = getSpamGuilds().length + (getSettings().spamHideBots ? 1 : 0) + (getSettings().spamDeclined ? 1 : 0);
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade e quem te removeu", "Friend requests and who removed you") }),
     h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
+    (tab === "requests" ? pending.length : removedAll.length) ? h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome ou @", "Search by name or @") }) : null,
     tab === "requests" ? h(React.Fragment, null,
       h(Group, null,
         h(NavRow, { icon: "shield", color: "#ff9f0a", title: NAMES.spamFilter(), detail: rules ? String(rules) : L("Desligado", "Off"), onClick: () => nav.push({ type: "spamFilter" }) }),
@@ -4351,14 +4358,16 @@ function FriendsScreen({ tab: initialTab }) {
       h(BulkProgress),
       pending.length ? h(Chips, { label: L("Filtrar", "Filter"), value: rf, onChange: setRf, options: [["all", L("Todos", "All"), counts.all], ["mutual", L("Em comum", "Mutual"), counts.mutual], ["fresh", L("Conta nova", "New account"), counts.fresh], ["bot", "Bots", counts.bot]] }) : null,
       shown.length ? h(Group, { header: L(`${shown.length} ${plural(shown.length, "pedido pendente", "pedidos pendentes")}`, `${shown.length} pending ${plural(shown.length, "request", "requests")}`) }, shown.map((r) => h(RequestRow, { key: r.id, r, isNew: r.sentAt > seen.req })))
+        : query && filtered.length ? h(Empty, { icon: "search", title: L("Ninguém encontrado", "No one found") }, L(`Nenhum pedido com "${q.trim()}".`, `No requests matching "${q.trim()}".`))
         : pending.length ? h(Empty, { icon: "search", title: L("Nenhum pedido neste filtro", "No requests match this filter") }, rf === "mutual" || rf === "bot" ? L("Amigos em comum e possíveis bots aparecem conforme os perfis carregam, enquanto você rola a lista.", "Mutual friends and possible bots show up as profiles load while you scroll the list.") : null)
         : h(Empty, { icon: "personBell", title: L("Nenhum pedido pendente", "No pending requests") }, L("Quando alguém te mandar um pedido de amizade, aparece aqui.", "When someone sends you a friend request, it shows up here.")),
       bots.length && !bulk.running ? h(Group, { footer: L("Só conta quem já teve o perfil carregado.", "Only counts people whose profile has loaded.") }, h(NavRow, { title: L(`Recusar todos os possíveis bots (${bots.length})`, `Decline all possible bots (${bots.length})`), danger: true, onClick: () => confirmBulk(bots.map((r) => r.id), "bots", L("Recusar possíveis bots", "Decline possible bots")) })) : null,
       null)
     : h(React.Fragment, null,
       removed.length ? h(Group, null, removed.map((r, i) => h(RemovedRow, { key: `${r.userId}-${r.at}-${i}`, r, isNew: r.at > seen.rem })))
+        : removedAll.length ? h(Empty, { icon: "search", title: L("Ninguém encontrado", "No one found") }, L(`Ninguém com "${q.trim()}" te removeu.`, `No one matching "${q.trim()}" removed you.`))
         : h(Empty, { icon: "personBell", title: L("Ninguém te removeu", "No one removed you") }, L("Quando alguém desfizer a amizade com você, aparece aqui.", "When someone unfriends you, it shows up here.")),
-      removed.length ? h(Group, null, h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => saveRemovedFriends([])) })) : null));
+      removedAll.length && !query ? h(Group, null, h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => saveRemovedFriends([])) })) : null));
 }
 function SpamListScreen() {
   useBus(friendsBus, settingsBus);
@@ -5492,7 +5501,7 @@ function settingsPages() {
     { id: "friends", title: NAMES.friends(), icon: "personBell", color: "#34c759", summary: () => (getSettings().friendsEnabled ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [
         { footer: L("Mostra um botão no topo com os pedidos de amizade pendentes e quem te removeu da lista de amigos. Não manda aviso, só o contador vermelho.", "Adds a top bar button with your pending friend requests and who removed you as a friend. No notifications, just the red counter."),
-          items: [{ ...sw("friendsEnabled", L("Ativar Amigos", "Turn on Friends")), after: (v) => { if (v) safe(() => initFriends()); syncDOM(); } }] },
+          items: [{ ...sw("friendsEnabled", L("Ativar Solicitações", "Turn on Requests")), after: (v) => { if (v) safe(() => initFriends()); syncDOM(); } }] },
         { title: L("Etiquetas", "Tags"), footer: L("\"Possível bot\": conta nova, sem amigos em comum, sem contas conectadas e sem Nitro. As etiquetas não escondem ninguém; pra isso use o Filtro anti-spam.", "\"Possible bot\": a new account with no mutual friends, no connected accounts and no Nitro. Tags don't hide anyone; use the Spam filter for that."),
           items: [num("friendsNewDays", L("\"Conta nova\" até", "\"New account\" up to"), 1, 3650, 1, L("dias", "days")), num("friendsBotDays", L("\"Possível bot\" até", "\"Possible bot\" up to"), 1, 3650, 1, L("dias", "days"))] },
       ] },
@@ -6106,6 +6115,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-btn-primary:disabled { opacity: .45; cursor: default; filter: none; }
 .dmtt-app :focus { outline: none; }
 .dmtt-app :focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; border-radius: 8px; }
+.dmtt-app .dmtt-search input:focus-visible { outline: none; }
 .dmtt-app .dmtt-row:focus-visible, .dmtt-app .dmtt-tile-card:focus-visible { outline-offset: -2px; }
 .dmtt-app input::placeholder, .dmtt-app textarea::placeholder { color: var(--c-muted); opacity: 1; }
 .dmtt-flashwrap.is-flash .dmtt-row-sub, .dmtt-flashwrap.is-flash .dmtt-card-action, .dmtt-flashwrap.is-flash .dmtt-meta-line, .dmtt-flashwrap.is-flash .dmtt-row-time, .dmtt-fr.is-flash .dmtt-row-sub, .dmtt-fr.is-flash .dmtt-fr-user, .dmtt-fr.is-flash .dmtt-fr-time { color: #a8aeb6; }
