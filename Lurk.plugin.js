@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vtzr
- * @version 2.12.0
+ * @version 2.13.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vtzr/lurk-bd
  * @source https://github.com/vtzr/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.12.0";
+const VERSION = "2.13.0";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,10 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.13.0", items: [
+    ["new", "Botão direito num canal, categoria ou servidor › Ignorar no Lurk: o Lurk para de registrar tudo que acontece ali, como mensagens, apagadas, editadas, menções, palavras-chave, digitação e calls. O que já tinha sido salvo continua. A lista fica em Ajustes › Ignorados.", "Right-click a channel, category or server › Ignore in Lurk: Lurk stops logging everything that happens there, like messages, deletes, edits, mentions, keywords, typing and calls. What was already saved stays. The list is in Settings › Ignored."],
+    ["improved", "Grupos ignorados agora também deixam de registrar mensagens dos VIPs, apagadas e menções, e não só o digitou e apagou.", "Ignored groups now also stop logging VIP messages, deletes and mentions, not just typed & quit."],
+  ] },
   { version: "2.12.0", items: [
     ["new", "Lista VIP: novo aviso \"Entrar ou sair de um servidor em comum\", desligado por padrão. As entradas e saídas aparecem no Histórico VIP › Perfil com o servidor, a entrada, a saída e quanto tempo a pessoa ficou.", "VIP list: a new \"They join or leave a shared server\" alert, off by default. Joins and leaves show up in VIP history › Profile with the server, when they joined, when they left and how long they stayed."],
     ["improved", "Perfil do VIP: botão vermelho Remover ao lado de Mensagem, Rotina, Galeria e Notas.", "VIP page: a red Remove button next to Message, Routine, Gallery and Notes."],
@@ -573,9 +577,25 @@ const trim = (list) => list.slice(0, Math.max(50, Number(getSettings().maxEntrie
 function updateRecord(id, patch) { saveHistory(getHistory().map((r) => (r.id === id ? { ...r, ...patch } : r))); }
 function deleteRecords(predicate) { saveHistory(getHistory().filter((r) => !predicate(r))); }
 
-const getIgnored = () => Data.load(k("ignored")) || { users: {}, channels: {} };
+const getIgnored = () => { const ig = Data.load(k("ignored")) || {}; return { users: ig.users || {}, channels: ig.channels || {}, guilds: ig.guilds || {} }; };
 const isIgnoredUser = (id) => !!getIgnored().users[id];
 const isIgnoredChannel = (id) => !!getIgnored().channels[id];
+const isIgnoredGuild = (id) => !!id && !!getIgnored().guilds[id];
+function isIgnoredPlace(channelId, guildId) {
+  if (!channelId && !guildId) return false;
+  const ig = getIgnored();
+  if (channelId && ig.channels[channelId]) return true;
+  const ch = channelId ? safe(() => ChannelStore?.getChannel?.(channelId)) : null;
+  const gid = guildId || ch?.guild_id || null;
+  if (gid && ig.guilds[gid]) return true;
+  let parent = ch?.parent_id || ch?.parentId || null;
+  for (let i = 0; parent && i < 2; i++) {
+    if (ig.channels[parent]) return true;
+    const pc = safe(() => ChannelStore?.getChannel?.(parent));
+    parent = pc?.parent_id || pc?.parentId || null;
+  }
+  return false;
+}
 function toggleIgnore(type, id, label) {
   const ig = getIgnored();
   if (ig[type][id]) delete ig[type][id];
@@ -583,10 +603,16 @@ function toggleIgnore(type, id, label) {
   Data.save(k("ignored"), ig);
   if (ig[type][id]) {
     for (const [key, s] of sessions) {
-      if ((type === "users" && s.userId === id) || (type === "channels" && s.channelId === id)) endSession(key, false);
+      if ((type === "users" && s.userId === id) || (type !== "users" && isIgnoredPlace(s.channelId))) endSession(key, false);
+    }
+    if (type !== "users") {
+      for (const [uid, v] of [...vipVoice]) if (isIgnoredPlace(v.channelId, v.guildId)) safe(() => closeVoice(uid));
+      if (myCall.sess && isIgnoredPlace(myCall.sess.channelId, myCall.sess.guildId)) safe(() => endMyCall());
+      if (type === "guilds") scheduleSubscribe();
     }
   }
   historyBus.emit();
+  vipBus.emit();
 }
 
 const seenBus = createBus();
@@ -1562,7 +1588,7 @@ function onTypingStart(action) {
     const s = getSettings();
     if (info.kind === "group" && !s.trackGroupDMs) return;
     if (info.kind === "unknown" && !s.trackUnknownChannels) return;
-    if (isIgnoredUser(userId) || isIgnoredChannel(channelId)) return;
+    if (isIgnoredUser(userId) || isIgnoredPlace(channelId, action.guildId)) return;
 
     diag.typingEvents = [{ at: Date.now(), channelId, userId, kind: info.kind }, ...diag.typingEvents].slice(0, 15);
     saveDiag();
@@ -1632,6 +1658,7 @@ function onMessageCreate(action) {
     }
     const ch = ChannelStore?.getChannel?.(channelId);
     const gid = action.guildId || msg.guild_id || ch?.guild_id || null;
+    if (isIgnoredPlace(channelId, gid)) return;
     if (!gid && ch?.type === 1) {
       const other = userId === myId() ? (ch.recipients || []).map((r) => (typeof r === "object" ? r?.id : r))[0] : userId;
       if (other && isVip(other)) safe(() => recordReply(other, userId === myId(), Date.parse(msg.timestamp) || Date.now()));
@@ -1690,6 +1717,7 @@ function onMessageUpdate(action) {
   try {
     const msg = action?.message;
     if (!msg?.id) return;
+    if (isIgnoredPlace(msg.channel_id || action.channelId, msg.guild_id || action.guildId)) return;
     handleMentionUpdate(msg);
     const d = loadVip();
     const m = d.messages.find((x) => x.id === msg.id);
@@ -1714,8 +1742,8 @@ function markDeleted(ids) {
   }
   if (changed) saveVipSoon("messages");
 }
-const onMessageDelete = (a) => { try { if (a?.id) { markDeleted([a.id]); handleMentionDelete([a.id]); } } catch (e) { Logger.error("MESSAGE_DELETE", e); } };
-const onMessageDeleteBulk = (a) => { try { if (a?.ids?.length) { markDeleted(a.ids); handleMentionDelete(a.ids); } } catch (e) { Logger.error("MESSAGE_DELETE_BULK", e); } };
+const onMessageDelete = (a) => { try { if (a?.id && !isIgnoredPlace(a.channelId, a.guildId)) { markDeleted([a.id]); handleMentionDelete([a.id]); } } catch (e) { Logger.error("MESSAGE_DELETE", e); } };
+const onMessageDeleteBulk = (a) => { try { if (a?.ids?.length && !isIgnoredPlace(a.channelId, a.guildId)) { markDeleted(a.ids); handleMentionDelete(a.ids); } } catch (e) { Logger.error("MESSAGE_DELETE_BULK", e); } };
 const earlyHandled = new WeakSet();
 const EARLY = { MESSAGE_UPDATE: onMessageUpdate, MESSAGE_DELETE: onMessageDelete, MESSAGE_DELETE_BULK: onMessageDeleteBulk };
 const onceEarly = (fn) => (a) => { if (a && typeof a === "object" && earlyHandled.has(a)) return; fn(a); };
@@ -1833,7 +1861,7 @@ function pushMentionEvent(ev) {
 const emojiKey = (e) => e?.id || e?.name || "?";
 function onReactionAdd(a) {
   try {
-    if (!getSettings().mentionReaction || !a?.userId || a.userId === myId()) return;
+    if (!getSettings().mentionReaction || !a?.userId || a.userId === myId() || isIgnoredPlace(a.channelId, a.guildId)) return;
     const msg = safe(() => MessageStore?.getMessage?.(a.channelId, a.messageId));
     const author = a.messageAuthorId || msg?.author?.id;
     if (author !== myId()) return;
@@ -1911,10 +1939,12 @@ function initVoice() {
 function normVS(vs) {
   if (!vs) return null;
   const pick = (a, b) => (vs[a] !== undefined ? vs[a] : vs[b]);
+  const channelId = pick("channelId", "channel_id") || null;
+  const guildId = pick("guildId", "guild_id") || null;
   return {
     userId: pick("userId", "user_id"),
-    channelId: pick("channelId", "channel_id") || null,
-    guildId: pick("guildId", "guild_id") || null,
+    channelId: channelId && isIgnoredPlace(channelId, guildId) ? null : channelId,
+    guildId,
     mute: !!vs.mute, deaf: !!vs.deaf,
     selfMute: !!pick("selfMute", "self_mute"), selfDeaf: !!pick("selfDeaf", "self_deaf"),
     selfStream: !!pick("selfStream", "self_stream"), selfVideo: !!pick("selfVideo", "self_video"),
@@ -2041,7 +2071,7 @@ function subscribeVipGuilds() {
     diag.subscribe = { socket: !!sock, guilds: gids.size, at: new Date().toISOString() };
     if (sock && typeof sock.send === "function" && gids.size) {
       const subscriptions = {};
-      for (const g of gids) subscriptions[g] = { typing: true };
+      for (const g of gids) if (!isIgnoredGuild(g)) subscriptions[g] = { typing: true };
       sock.send(37, { subscriptions });
       diag.subscribe.sent = true;
     }
@@ -3134,7 +3164,7 @@ async function checkServers() {
         const old = prev?.guilds?.[gid];
         if (old) { next.guilds[gid] = { ...old, name: guildNameOf(gid, old.name), joinedAt: old.joinedAt || localJoinedAt(gid, uid) }; continue; }
         const g = { name: guildNameOf(gid), joinedAt: localJoinedAt(gid, uid) };
-        if (prev && (prev.mine || []).includes(gid)) {
+        if (prev && (prev.mine || []).includes(gid) && !isIgnoredGuild(gid)) {
           if (!g.joinedAt && !stop) { try { g.joinedAt = await fetchJoinedAt(uid, gid); } catch (e) { if (rateLimited(e)) stop = true; } await pauseMs(2000); }
           const fresh = !g.joinedAt || g.joinedAt >= prev.checkedAt - 10 * 60000;
           if (fresh) evs.push({ userId: uid, at: g.joinedAt || now, field: "guildJoin", guildId: gid, guildName: g.name, ...(g.joinedAt ? {} : { joinFrom: prev.checkedAt, joinTo: now }) });
@@ -3142,7 +3172,7 @@ async function checkServers() {
         next.guilds[gid] = g;
       }
       if (prev) for (const [gid, old] of Object.entries(prev.guilds || {})) {
-        if (cur.has(gid) || !mine.has(gid)) continue;
+        if (cur.has(gid) || !mine.has(gid) || isIgnoredGuild(gid)) continue;
         evs.push({ userId: uid, at: now, field: "guildLeave", guildId: gid, guildName: guildNameOf(gid, old.name), joinedAt: old.joinedAt || null, leftFrom: prev.checkedAt, leftTo: now });
       }
       if (backfill > 0 && !stop) {
@@ -3325,7 +3355,7 @@ function snipeInterceptor(action) {
     if (!s.vipRecordMessages) return false;
     const id = action.id || action.message?.id;
     const cid = action.channelId || action.message?.channel_id;
-    if (!id || !cid) return false;
+    if (!id || !cid || isIgnoredPlace(cid, action.guildId || action.message?.guild_id)) return false;
     const m = safe(() => MessageStore?.getMessage?.(cid, id));
     const uid = m?.author?.id;
     if (!uid || !isVip(uid) || loadVip().messages.some((x) => x.id === id)) return false;
@@ -3533,6 +3563,7 @@ const SI = {
   gallery: "M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM3 16l5-5 4 4 3-3 6 6M15.5 9.5a1.5 1.5 0 1 0 0-.01",
   notes: "M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM14 3v5h5M8.5 12h7M8.5 15.5h7M8.5 8.5h3",
   routine: "M8 2v3M16 2v3M4 5h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 10h18M7 14h2M11 14h2M15 14h2M7 17.5h2M11 17.5h2",
+  hash: "M5 9h14M4 15h14M10 3 8 21M16 3l-2 18",
   sparkle: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
 };
 const LURK_ICON = () => SI[getSettings().lurkIcon] || SI.ghost;
@@ -5457,7 +5488,7 @@ function settingsPages() {
         { ...sw("showBadge", L("Contador de novidades", "Unread badge")), after: () => updateBadge() },
         { ...sw("showSnipeButton", L("Botão de histórico (apagadas e editadas)", "History button (deleted & edited)")), after: () => syncDOM() },
         { id: "lurkIcon", label: L("Ícone do Lurk", "Lurk icon"), type: "select", options: [["ghost", L("Fantasminha", "Ghost")], ["ninja", L("Máscara ninja", "Ninja mask")], ["eye", L("Olho", "Eye")]], after: () => syncDOM() }] }] },
-    { id: "ignored", title: L("Ignorados", "Ignored"), icon: "ban", color: "#8e8e93", summary: () => { const ig = getIgnored(); const n = Object.keys(ig.users).length + Object.keys(ig.channels).length; return n ? String(n) : L("Nenhum", "None"); }, sections: [], custom: () => h(IgnoredList) },
+    { id: "ignored", title: L("Ignorados", "Ignored"), icon: "ban", color: "#8e8e93", summary: () => { const ig = getIgnored(); const n = Object.keys(ig.users).length + Object.keys(ig.channels).length + Object.keys(ig.guilds).length; return n ? String(n) : L("Nenhum", "None"); }, sections: [], custom: () => h(IgnoredList) },
     { id: "friends", title: NAMES.friends(), icon: "personBell", color: "#34c759", summary: () => (getSettings().friendsEnabled ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [
         { footer: L("Mostra um botão no topo com os pedidos de amizade pendentes e quem te removeu da lista de amigos. Não manda aviso, só o contador vermelho.", "Adds a top bar button with your pending friend requests and who removed you as a friend. No notifications, just the red counter."),
@@ -5593,19 +5624,29 @@ function BackupSection() {
       h(NavRow, { title: L("Importar arquivo…", "Import file…"), onClick: () => inputRef.current?.click() })),
     h("input", { ref: inputRef, type: "file", accept: ".json,application/json", style: { display: "none" }, onChange: pick }));
 }
+function ignoredChannelInfo(id, x) {
+  const ch = safe(() => ChannelStore?.getChannel?.(id));
+  if (!ch) return { label: x.label || id, sub: L("Canal", "Channel"), icon: "hash" };
+  if (!ch.guild_id) return { label: channelLabel(ch) || x.label, sub: L("Grupo", "Group"), icon: "userPlus" };
+  const g = safe(() => GuildStore?.getGuild?.(ch.guild_id)?.name) || "";
+  const voice = ch.type === 2 || ch.type === 13;
+  const cat = ch.type === 4;
+  return { label: voice || cat ? ch.name : `#${ch.name}`, sub: [voice ? L("Canal de voz", "Voice channel") : cat ? L("Categoria", "Category") : L("Canal", "Channel"), g].filter(Boolean).join(" · "), icon: voice ? "headset" : "hash" };
+}
 function IgnoredList() {
   useBus(historyBus);
   const ig = getIgnored();
   const entries = [
     ...Object.entries(ig.users).map(([id, x]) => ({ type: "users", id, label: nameOf(id, { label: x.label }), sub: usernameOf(id) ? `@${usernameOf(id)}` : L("Pessoa", "Person") })),
-    ...Object.entries(ig.channels).map(([id, x]) => ({ type: "channels", id, label: channelLabel(ChannelStore?.getChannel?.(id)) || x.label, sub: L("Grupo", "Group") })),
+    ...Object.entries(ig.guilds).map(([id, x]) => ({ type: "guilds", id, label: safe(() => GuildStore?.getGuild?.(id)?.name) || x.label, sub: L("Servidor inteiro", "Whole server"), icon: "globe" })),
+    ...Object.entries(ig.channels).map(([id, x]) => ({ type: "channels", id, ...ignoredChannelInfo(id, x) })),
   ];
   return entries.length
-    ? h(Group, { footer: L("Pessoas e grupos ignorados não são monitorados.", "Ignored people and groups aren't tracked.") }, entries.map((e) => h("div", { key: e.type + e.id, className: "dmtt-row" },
-        e.type === "users" ? h(Avatar, { userId: e.id, size: 30 }) : h(IconTile, { name: "userPlus", color: "#8e8e93", size: 30 }),
+    ? h(Group, { footer: L("O Lurk não registra nada que venha dessas pessoas, servidores, canais e grupos. O que já tinha sido salvo continua.", "Lurk doesn't log anything from these people, servers, channels and groups. What was already saved stays.") }, entries.map((e) => h("div", { key: e.type + e.id, className: "dmtt-row" },
+        e.type === "users" ? h(Avatar, { userId: e.id, size: 30 }) : h(IconTile, { name: e.icon || "userPlus", color: "#8e8e93", size: 30 }),
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, e.label), h("span", { className: "dmtt-row-sub" }, e.sub)),
         h("button", { className: "dmtt-link", onClick: () => toggleIgnore(e.type, e.id) }, L("Remover", "Remove")))))
-    : h(Empty, { icon: "ban", title: L("Ninguém ignorado", "No one ignored") }, L("Clique com o botão direito em uma pessoa ou grupo pra ignorar.", "Right-click a person or group to ignore them."));
+    : h(Empty, { icon: "ban", title: L("Nada ignorado", "Nothing ignored") }, L("Clique com o botão direito em uma pessoa, grupo, canal ou servidor pra ignorar.", "Right-click a person, group, channel or server to ignore it."));
 }
 
 let appCloseBtn = null;
@@ -6337,10 +6378,19 @@ module.exports = class Lurk {
       const ch = props?.channel;
       if (!ch?.id) return;
       const sn = snipeCountFor(ch.id);
-      if (!sn) return;
+      const label = ch.type === 4 ? L("Ignorar categoria no Lurk", "Ignore category in Lurk") : L("Ignorar canal no Lurk", "Ignore channel in Lurk");
       pushItems(ret, [
         ContextMenu.buildItem({ type: "separator" }),
-        ContextMenu.buildItem({ label: `${NAMES.snipe()} (${sn})`, action: () => openSnipe(ch.id) }),
+        sn ? ContextMenu.buildItem({ label: `${NAMES.snipe()} (${sn})`, action: () => openSnipe(ch.id) }) : null,
+        ContextMenu.buildItem({ type: "toggle", label, checked: isIgnoredChannel(ch.id), action: () => toggleIgnore("channels", ch.id, ch.name) }),
+      ].filter(Boolean));
+    }));
+    this.unpatchers.push(ContextMenu.patch("guild-context", (ret, props) => {
+      const g = props?.guild;
+      if (!g?.id) return;
+      pushItems(ret, [
+        ContextMenu.buildItem({ type: "separator" }),
+        ContextMenu.buildItem({ type: "toggle", label: L("Ignorar servidor no Lurk", "Ignore server in Lurk"), checked: isIgnoredGuild(g.id), action: () => toggleIgnore("guilds", g.id, g.name) }),
       ]);
     }));
   }
