@@ -53,6 +53,8 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.13.0", items: [
+    ["new", "Lista VIP: quem você remove fica 7 dias em Removidos recentemente, com o histórico guardado. Dá pra desfazer logo depois de remover, restaurar ou apagar na hora, e se adicionar a pessoa de novo nesse prazo, tudo volta. O prazo dá pra mudar em Ajustes › Lista VIP.", "VIP list: people you remove stay under Recently removed for 7 days with their history kept. You can undo right after removing, restore or delete right away, and adding them back in that time brings everything back. You can change the deadline in Settings › VIP list."],
+    ["improved", "Ao remover pelo perfil do VIP, dá pra escolher apagar todo o histórico na hora.", "When removing from a VIP's page, you can choose to delete all their history right away."],
     ["new", "Botão direito num canal, categoria ou servidor › Ignorar no Lurk: o Lurk para de registrar tudo que acontece ali, como mensagens, apagadas, editadas, menções, palavras-chave, digitação e calls. O que já tinha sido salvo continua. A lista fica em Ajustes › Ignorados.", "Right-click a channel, category or server › Ignore in Lurk: Lurk stops logging everything that happens there, like messages, deletes, edits, mentions, keywords, typing and calls. What was already saved stays. The list is in Settings › Ignored."],
     ["improved", "Grupos ignorados agora também deixam de registrar mensagens dos VIPs, apagadas e menções, e não só o digitou e apagou.", "Ignored groups now also stop logging VIP messages, deletes and mentions, not just typed & quit."],
     ["improved", "\"Amigos\" agora se chama \"Solicitações\" e tem uma busca por nome ou @ nos novos pedidos, no Spam e em quem te removeu.", "\"Friends\" is now called \"Requests\" and has a search by name or @ in new requests, Spam and who removed you."],
@@ -299,6 +301,7 @@ const DEFAULTS = {
 
   vipTrackServers: false,
   vipRecordMessages: true,
+  vipRemovedDays: 7,
   vipToast: true,
   vipDesktop: true,
   vipSound: false,
@@ -676,7 +679,12 @@ const vipFlag = (id, field) => { const e = getVipList()[id]; return !!e && (e[fi
 function setVip(id, value) {
   const list = getVipList();
   if (value === null) delete list[id];
-  else list[id] = { ...VIP_DEFAULT, ...(list[id] ? {} : vipPreset()), ...(list[id] || {}), ...value };
+  else {
+    const rem = getRemovedVips()[id];
+    const base = list[id] || rem?.entry || null;
+    list[id] = { ...VIP_DEFAULT, ...(base ? {} : vipPreset()), ...(base || {}), ...value };
+    if (rem) { const r = getRemovedVips(); delete r[id]; Data.save(k("vipRemoved"), r); }
+  }
   Data.save(k("vip"), list);
   if (value !== null) {
     if (!presenceCache.has(id)) presenceCache.set(id, rawPresence(id));
@@ -688,8 +696,57 @@ function setVip(id, value) {
   }
   vipBus.emit();
 }
+const getRemovedVips = () => Data.load(k("vipRemoved")) || {};
+const isRemovedVip = (id) => !!getRemovedVips()[id];
+const removedDays = () => Math.max(1, Number(getSettings().vipRemovedDays) || 7);
+function removeVip(id, purge) {
+  const entry = getVipList()[id];
+  if (!entry) return;
+  const name = nameOf(id, entry);
+  if (purge) {
+    setVip(id, null);
+    purgeVipData(id);
+    toast(L(`${name} saiu da Lista VIP e o histórico foi apagado`, `${name} was removed and their history deleted`), { type: "success" });
+    return;
+  }
+  const r = getRemovedVips();
+  r[id] = { at: Date.now(), entry };
+  Data.save(k("vipRemoved"), r);
+  setVip(id, null);
+  const days = removedDays();
+  const text = L(`${name} saiu da Lista VIP. O histórico fica guardado por ${days} ${plural(days, "dia", "dias")}.`, `${name} was removed from your VIP list. Their history is kept for ${days} ${plural(days, "day", "days")}.`);
+  let close = null;
+  close = safe(() => UI.showNotice(text, { type: "info", timeout: 10000, buttons: [{ label: L("Desfazer", "Undo"), onClick: () => { safe(() => close?.()); restoreVip(id); } }] }));
+  if (!close) toast(text, { type: "info" });
+}
+function restoreVip(id) {
+  const rem = getRemovedVips()[id];
+  if (!rem || isVip(id)) return;
+  setVip(id, {});
+  toast(L(`${nameOf(id, rem.entry)} voltou pra Lista VIP com todo o histórico`, `${nameOf(id, rem.entry)} is back on your VIP list with their full history`), { type: "success" });
+}
+function purgeVipData(uid) {
+  safe(() => deleteVipData(uid));
+  for (const key of ["vipNotes", "vipDates", "vipIdentity", "vipGuilds", "profileWatchSnap"]) {
+    const o = Data.load(k(key));
+    if (o && typeof o === "object" && uid in o) { delete o[uid]; Data.save(k(key), o); }
+  }
+  safe(() => { const u = unusualState(); if (u[uid]) { delete u[uid]; Data.save(k("vipUnusual"), u); } });
+  safe(() => { const rp = getReplies(); if (rp[uid]) { delete rp[uid]; flushReplies(); } });
+  safe(() => { const f = getFreq(); const x = getFreqX(); delete f[uid]; delete x.dev[uid]; freqDirty = true; flushFreq(); });
+  safe(() => { const log = getProfileLog(); const keep = log.filter((e) => e.userId !== uid); if (keep.length !== log.length) { Data.save(k("vipProfileLog"), keep); profileBus.emit(); } });
+  safe(() => { if (getProfileWatch() === uid) setProfileWatch(null); });
+  const r = getRemovedVips();
+  if (r[uid]) { delete r[uid]; Data.save(k("vipRemoved"), r); }
+  vipBus.emit();
+}
+function purgeExpiredVips() {
+  const limit = removedDays() * DAY;
+  for (const [id, r] of Object.entries(getRemovedVips())) if (!isVip(id) && Date.now() - (r.at || 0) >= limit) purgeVipData(id);
+}
 function toggleVip(id, label) {
-  if (isVip(id)) setVip(id, null);
+  if (isVip(id)) removeVip(id, false);
+  else if (isRemovedVip(id)) restoreVip(id);
   else {
     setVip(id, { addedAt: Date.now(), label: label || id });
     toast(L(`${label || "Pessoa"} adicionada à Lista VIP`, `${label || "User"} added to your VIP list`), { type: "success" });
@@ -2744,12 +2801,12 @@ function pruneFreq() {
   const x = getFreqX();
   const keep = weekStartOf(Date.now()) - (FREQ_WEEKS - 1) * 7 * DAY;
   for (const id of Object.keys(all)) {
-    if (!isVip(id)) { delete all[id]; freqDirty = true; continue; }
+    if (!isVip(id) && !isRemovedVip(id)) { delete all[id]; freqDirty = true; continue; }
     for (const wk of Object.keys(all[id])) if (Number(wk) < keep) { delete all[id][wk]; freqDirty = true; }
   }
   for (const wk of Object.keys(x.cov)) if (Number(wk) < keep) { delete x.cov[wk]; freqDirty = true; }
   for (const id of Object.keys(x.dev)) {
-    if (!isVip(id)) { delete x.dev[id]; freqDirty = true; continue; }
+    if (!isVip(id) && !isRemovedVip(id)) { delete x.dev[id]; freqDirty = true; continue; }
     for (const wk of Object.keys(x.dev[id])) if (Number(wk) < keep) { delete x.dev[id][wk]; freqDirty = true; }
   }
 }
@@ -4809,7 +4866,8 @@ function VipScreen() {
   if (!all.length) {
     return h(React.Fragment, null, h(LargeTitle, { title: NAMES.vip() }),
       h(Empty, { icon: "star", title: L("Sua Lista VIP está vazia", "Your VIP list is empty") }, L("Adicione pelo ID abaixo ou pelo botão direito em alguém › Lista VIP. Você passa a ver status, calls e o que a pessoa manda, edita e apaga.", "Add someone by ID below or right-click a person › VIP list. You'll see their status, calls and what they send, edit and delete.")),
-      h(VipAddById, { onAdded: (id) => nav.push({ type: "vipPerson", userId: id }) }));
+      h(VipAddById, { onAdded: (id) => nav.push({ type: "vipPerson", userId: id }) }),
+      h(RemovedVips));
   }
   let ids = all;
   if (q.trim()) { const s = q.trim().toLowerCase(); ids = ids.filter((id) => [nameOf(id, list[id]), usernameOf(id), id].some((v) => v && String(v).toLowerCase().includes(s))); }
@@ -4834,7 +4892,8 @@ function VipScreen() {
       return h(NavRow, { key: id, avatar: h(Avatar, { userId: id, status }), title: nameOf(id, list[id]), subtitle: joinNodes(sub), onClick: () => nav.push({ type: "vipPerson", userId: id }) });
     })),
     h(VipAddById, null),
-    h("div", { className: "dmtt-sec-f" }, L("Também dá pra adicionar pelo botão direito na pessoa › Lista VIP.", "You can also right-click a person › VIP list.")));
+    h("div", { className: "dmtt-sec-f" }, L("Também dá pra adicionar pelo botão direito na pessoa › Lista VIP.", "You can also right-click a person › VIP list.")),
+    h(RemovedVips));
 }
 
 const PRESENCE_VERB = labelMap(
@@ -5275,6 +5334,39 @@ function DatesTimeRow() {
       h("option", { value: "" }, L("Ao abrir o Discord", "When Discord opens")), h("option", { value: "fixed" }, L("Horário fixo", "Fixed time"))),
     v ? h("input", { className: "dmtt-text dmtt-time", type: "time", "aria-label": L("Horário", "Time"), value: v, onChange: (e) => setSetting("datesNotifyAt", e.target.value || "09:00") }) : null);
 }
+function RemoveVipBody({ id, onPurge }) {
+  const [purge, setPurge] = React.useState(false);
+  const days = removedDays();
+  return h("div", { style: { display: "flex", flexDirection: "column", gap: "14px", color: "var(--text-default, var(--text-normal))", fontSize: "14px", lineHeight: 1.4 } },
+    h("div", null, L(`${nameOf(id, getVipList()[id] || {})} sai da Lista VIP e o histórico fica guardado por ${days} ${plural(days, "dia", "dias")} em Removidos recentemente. Se adicionar de novo nesse prazo, tudo volta.`, `${nameOf(id, getVipList()[id] || {})} leaves your VIP list and their history is kept for ${days} ${plural(days, "day", "days")} under Recently removed. Add them back in that time and everything returns.`)),
+    h("label", { style: { display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer" } },
+      h("input", { type: "checkbox", checked: purge, style: { marginTop: "3px", width: "16px", height: "16px", accentColor: "#ff453a" }, onChange: (e) => { setPurge(e.target.checked); onPurge(e.target.checked); } }),
+      h("span", null, h("b", null, L("Apagar todo o histórico agora", "Delete all history now")), h("br"), h("span", { style: { color: "var(--text-muted)", fontSize: "13px" } }, L("Status, mensagens, calls, fotos, notas e rotina. Não dá pra desfazer.", "Status, messages, calls, photos, notes and routine. This can't be undone.")))));
+}
+function confirmRemoveVip(id, after) {
+  const choice = { purge: false };
+  UI.showConfirmationModal(L(`Remover ${nameOf(id, getVipList()[id] || {})} da Lista VIP?`, `Remove ${nameOf(id, getVipList()[id] || {})} from your VIP list?`), h(RemoveVipBody, { id, onPurge: (v) => { choice.purge = v; } }), {
+    danger: true, confirmText: L("Remover", "Remove"), cancelText: L("Cancelar", "Cancel"),
+    onConfirm: () => { removeVip(id, choice.purge); safe(() => after?.()); },
+  });
+}
+function RemovedVips() {
+  useBus(vipBus, settingsBus);
+  useTicker(60000);
+  const rem = Object.entries(getRemovedVips()).filter(([id]) => !isVip(id)).sort((a, b) => b[1].at - a[1].at);
+  if (!rem.length) return null;
+  const limit = removedDays() * DAY;
+  return h(Group, { header: L("Removidos recentemente", "Recently removed"), footer: L("Depois do prazo, o histórico é apagado sozinho. O prazo fica em Ajustes › Lista VIP.", "After the deadline, the history is deleted on its own. You can change it in Settings › VIP list.") },
+    rem.map(([id, r]) => {
+      const left = Math.max(0, Math.ceil((r.at + limit - Date.now()) / DAY));
+      const name = nameOf(id, r.entry || {});
+      return h("div", { key: id, className: "dmtt-row" },
+        h(Avatar, { userId: id, size: 30 }),
+        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, name), h("span", { className: "dmtt-row-sub" }, left <= 1 ? L("Apaga em menos de 1 dia", "Deleted in less than a day") : L(`Apaga em ${left} dias`, `Deleted in ${left} days`))),
+        h("button", { className: "dmtt-link", onClick: () => restoreVip(id) }, L("Restaurar", "Restore")),
+        h("button", { className: "dmtt-link is-danger", onClick: () => confirmDanger(L(`Apagar o histórico de ${name}?`, `Delete ${name}'s history?`), L("Status, mensagens, calls, fotos, notas e rotina. Não dá pra desfazer.", "Status, messages, calls, photos, notes and routine. This can't be undone."), () => purgeVipData(id), L("Apagar", "Delete")) }, L("Apagar", "Delete")));
+    }));
+}
 function VipPresetRows() {
   useBus(settingsBus);
   const preset = vipPreset();
@@ -5331,7 +5423,7 @@ function VipPersonScreen({ userId: id }) {
       h(ActionButton, { icon: h(SIcon, { d: SI.routine, size: 18 }), label: L("Rotina", "Routine"), onClick: () => nav.push({ type: "vipRoutine", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.gallery, size: 18 }), label: L("Galeria", "Gallery"), onClick: () => nav.push({ type: "vipGallery", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.notes, size: 18 }), label: L("Notas", "Notes"), onClick: () => nav.push({ type: "vipNotes", userId: id }) }),
-      h(ActionButton, { icon: h(SIcon, { d: SI.trash, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })),
+      h(ActionButton, { icon: h(SIcon, { d: SI.trash, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmRemoveVip(id, () => nav.pop()) })),
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível hoje", "invisible today")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
     h(Segmented, { value: tab, onChange: setTab, options: [topt("activity", L("Atividade", "Activity")), topt("messages", L("Mensagens", "Messages")), topt("voice", vipVoice.has(id) ? "Calls ●" : "Calls"), topt("profile", L("Perfil", "Profile")), ["typing", L("Digitou", "Typed")]] }),
@@ -5460,6 +5552,8 @@ function settingsPages() {
           { id: "vipPreset", type: "custom", render: () => h(VipPresetRows) }] },
         { showIf: () => Object.keys(getVipList()).length > 0, footer: L("Opcional. Troca os avisos de todos os VIPs atuais por esse padrão, inclusive o que você ajustou em cada um.", "Optional. Replaces the alerts of everyone already on your list with these defaults, including what you set for each person."), items: [
           { id: "vipPresetApply", type: "custom", render: () => h(VipPresetApply) }] },
+        { title: L("Removidos", "Removed"), footer: L("Quem sai da Lista VIP fica em Removidos recentemente por esse tempo. Se adicionar de novo nesse prazo, todo o histórico volta. Depois disso, ele é apagado.", "People removed from your VIP list stay under Recently removed for this long. Add them back in that time and their whole history returns. After that, it's deleted."), items: [
+          num("vipRemovedDays", L("Guardar o histórico por", "Keep history for"), 1, 365, 1, L("dias", "days"))] },
         { title: L("Servidores", "Servers"), items: [
           { ...sw("vipTrackServers", L("Digitou e apagou nos servidores", "Typed & quit in servers"), L("Experimental e com risco. Fica desligado por padrão.", "Experimental and risky. Off by default.")), after: (v) => v && scheduleSubscribe(),
             confirmOn: { title: () => L("Digitou e apagou nos servidores", "Typed & quit in servers"), confirm: () => L("Ligar mesmo assim", "Turn on anyway"),
@@ -6027,6 +6121,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-link { align-self: flex-start; border: none; background: none; padding: 6px 4px; margin: -4px 0 -4px -4px; border-radius: 6px; color: var(--c-link); font-size: 13px; font-weight: 500; cursor: pointer; flex: none; }
 .dmtt-link:hover { background: var(--c-hover); }
 .dmtt-row > .dmtt-link { align-self: center; margin-left: 0; }
+.dmtt-link.is-danger { color: var(--c-red); }
 .dmtt-more { align-self: center; border: none; background: none; color: var(--c-link); font-size: 13px; font-weight: 500; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
 .dmtt-more:hover { background: var(--c-hover); }
 .dmtt-del { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: none; border: none; border-radius: 50%; background: var(--c-fill2); color: var(--c-muted); cursor: pointer; opacity: 0; transition: opacity .12s; padding: 0; }
@@ -6333,6 +6428,7 @@ module.exports = class Lurk {
     Scheduler.once("identities", 10000, () => checkIdentities(true));
     Scheduler.every("watchProfile", 15 * 60000, () => checkWatchedProfile(), 20000);
     Scheduler.every("servers", SERVER_EVERY, () => checkServers(), 90000);
+    Scheduler.every("vipPurge", 3600000, () => purgeExpiredVips(), 60000);
     freqCache = null;
     replyCache = null;
     unusualCache = null;
