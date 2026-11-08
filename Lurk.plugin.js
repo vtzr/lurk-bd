@@ -55,7 +55,7 @@ const CHANGELOG = [
   { version: "2.15.0", items: [
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
     ["improved", "Histórico VIP › Mensagens não mostra mais as mensagens normais do seu privado com o VIP, que você já viu. Do privado aparecem só as editadas e apagadas. Mensagens de servidores e grupos continuam todas lá, e a busca continua achando tudo.", "VIP history › Messages no longer shows regular messages from your DMs with the VIP, which you've already seen. From DMs, only edited and deleted ones show up. Messages from servers and groups are all still there, and search still finds everything."],
-    ["new", "Quando um VIP é pego invisível, o \"offline há…\" vira \"visto invisível há…\", contando desde a última atividade dele. Aparece nas mensagens diretas, no topo da conversa, na Lista VIP e no perfil do VIP. Depois de 30 minutos sem atividade, volta pro \"offline há…\" de antes.", "When a VIP is caught invisible, \"offline for…\" becomes \"seen invisible … ago\", counting from their last activity. It shows in your DM list, at the top of the conversation, in the VIP list and on the VIP's page. After 30 minutes with no activity, it goes back to \"offline for…\"."],
+    ["new", "Quando um VIP é pego invisível, o \"offline há…\" vira \"visto invisível há…\", contando desde a última atividade dele. Aparece nas mensagens diretas, no topo da conversa, na Lista VIP e no perfil do VIP. Fica assim até a pessoa aparecer online, ausente ou não perturbe de novo.", "When a VIP is caught invisible, \"offline for…\" becomes \"seen invisible … ago\", counting from their last activity. It shows in your DM list, at the top of the conversation, in the VIP list and on the VIP's page. It stays that way until they show up as online, idle or do not disturb again."],
     ["improved", "O Lurk agora também percebe que um VIP está invisível quando ele entra em call, reage, edita ou apaga uma mensagem, além de digitar e mandar mensagem.", "Lurk now also notices a VIP is invisible when they join a call, react, edit or delete a message, besides typing and sending messages."],
   ] },
   { version: "2.14.0", items: [
@@ -1662,7 +1662,6 @@ function guildInfo(ch) {
   return { guildId: ch?.guild_id || null, guildName: safe(() => GuildStore?.getGuild?.(ch?.guild_id)?.name) || null, channelName: ch?.name || null };
 }
 
-const INVIS_WINDOW = 30 * 60000;
 let invisCache = null;
 let invisTimer = null;
 const getInvisAct = () => (invisCache ??= Data.load(k("vipInvisAct")) || {});
@@ -1671,8 +1670,7 @@ function clearInvisible(uid) { const a = getInvisAct(); if (a[uid]) { delete a[u
 function invisibleAt(uid) {
   if (!isVip(uid) || rawPresence(uid)?.status !== "offline") return null;
   if (vipVoice.has(uid) && getInvisAct()[uid]) return Date.now();
-  const at = getInvisAct()[uid];
-  return at && Date.now() - at < INVIS_WINDOW ? at : null;
+  return getInvisAct()[uid] || null;
 }
 const INVIS_VIA = {
   typing: () => [L("digitando", "typing"), L("Digitando", "Typing")],
@@ -2401,6 +2399,7 @@ function initSeen() {
     const st = rawPresence(id)?.status;
     if (!st) continue;
     const online = isOnlineStatus(st);
+    if (online) clearInvisible(id);
     let e = all[id];
     if (!e) {
       const pres = events.filter((x) => x.userId === id && x.type === "presence");
@@ -2427,7 +2426,14 @@ function lastSeenInfo(id) {
 }
 function fmtSeen({ kind, at }) {
   const diff = Date.now() - at;
-  if (kind === "invisible") return diff < 60000 ? L("visto invisível agora", "seen invisible now") : L(`visto invisível há ${Math.floor(diff / 60000)} min`, `seen invisible ${Math.floor(diff / 60000)}m ago`);
+  if (kind === "invisible") {
+    if (diff < 60000) return L("visto invisível agora", "seen invisible now");
+    if (diff < 3600000) return L(`visto invisível há ${Math.floor(diff / 60000)} min`, `seen invisible ${Math.floor(diff / 60000)}m ago`);
+    if (diff < DAY) return L(`visto invisível há ${Math.floor(diff / 3600000)} h`, `seen invisible ${Math.floor(diff / 3600000)}h ago`);
+    if (at >= startOfDay(Date.now()) - DAY) return L(`visto invisível ontem às ${fmtHM(at)}`, `seen invisible yesterday ${fmtHM(at)}`);
+    const dd = new Date(at);
+    return L(`visto invisível em ${pad(dd.getDate())}/${pad(dd.getMonth() + 1)}`, `seen invisible on ${pad(dd.getMonth() + 1)}/${pad(dd.getDate())}`);
+  }
   if (diff < 60000) return L(`${kind} agora`, `${kind} now`);
   if (diff < 3600000) { const m = Math.floor(diff / 60000); return L(`${kind} há ${m} min`, `${kind} for ${m}m`); }
   if (diff < DAY) { const hh = Math.floor(diff / 3600000); return L(`${kind} há ${hh} h`, `${kind} for ${hh}h`); }
@@ -2435,7 +2441,7 @@ function fmtSeen({ kind, at }) {
   const d = new Date(at);
   return L(`${kind} desde ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`, `${kind} since ${pad(d.getMonth() + 1)}/${pad(d.getDate())}`);
 }
-const fmtSeenTitle = ({ kind, at }) => kind === "invisible" ? L(`Aparece offline, mas teve atividade às ${fmtHM(at)}`, `Shows offline, but was active at ${fmtHM(at)}`) : `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
+const fmtSeenTitle = ({ kind, at }) => kind === "invisible" ? L(`Aparece offline, mas teve atividade ${fmtDM(at)}`, `Shows offline, but was active ${fmtDM(at)}`) : `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 function initPresenceCache() {
   presenceCache.clear();
   for (const id of Object.keys(getVipList())) presenceCache.set(id, rawPresence(id));
