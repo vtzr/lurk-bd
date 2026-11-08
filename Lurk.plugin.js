@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.13.1", items: [
+    ["improved", "\"Desconhecidos\" agora se chama \"Desistiram\" e fica dentro de Solicitações, junto com os pedidos de amizade. As duas coisas ligam e desligam juntas em Ajustes › Solicitações, e a tela inicial mostra só Solicitações.", "\"Strangers\" is now called \"Gave up\" and lives inside Requests, next to friend requests. Both turn on and off together in Settings › Requests, and the home screen shows just Requests."],
     ["fixed", "Pedidos cancelados: o card ficou mais claro, com quando a pessoa pediu e depois de quanto tempo cancelou em linhas separadas. Pedidos feitos há mais de 24 horas mostram a data junto com o horário.", "Canceled requests: the card is clearer, with when they sent it and how long until they canceled on separate lines. Requests sent more than 24 hours ago show the date along with the time."],
     ["improved", "Quem você tinha tirado da Lista VIP antes da versão 2.13.0 agora aparece em Removidos recentemente, com o prazo começando de novo pra você restaurar antes de o histórico ser apagado.", "People you removed from your VIP list before version 2.13.0 now show up under Recently removed, with a fresh deadline to restore them before their history is deleted."],
   ] },
@@ -2418,7 +2419,7 @@ function initPendingReqs() {
 }
 function onRelationshipAdd(action) {
   try {
-    if (!getSettings().friendReqTrack) return;
+    if (!getSettings().friendReqTrack || !getSettings().friendsEnabled) return;
     const rel = action?.relationship;
     if (!rel?.id) return;
     const pending = getPendingReqs();
@@ -2433,7 +2434,7 @@ function onRelationshipAdd(action) {
 }
 function onRelationshipRemove(action) {
   try {
-    if (!getSettings().friendReqTrack) return;
+    if (!getSettings().friendReqTrack || !getSettings().friendsEnabled) return;
     const id = action?.relationship?.id;
     if (!id) return;
     const pending = getPendingReqs();
@@ -3480,7 +3481,7 @@ function rememberContact(id) {
 function checkFirstContact(sess) {
   const s = getSettings();
   const { userId, channelId } = sess;
-  if (!s.firstContactTrack || !userId || userId === myId() || knownContacts.has(userId)) return;
+  if (!s.firstContactTrack || !s.friendsEnabled || !userId || userId === myId() || knownContacts.has(userId)) return;
   if (Date.now() - (firstThrottle.get(userId) || 0) < 30 * 60000) return;
   firstThrottle.set(userId, Date.now());
   let isRequest = false;
@@ -3864,7 +3865,7 @@ const NAMES = {
   spam: () => "Spam",
   typing: () => L("Digitou e apagou", "Typed & quit"),
   mentions: () => L("Menções", "Mentions"),
-  contacts: () => L("Desconhecidos", "Strangers"),
+  contacts: () => L("Desistiram", "Gave up"),
   snipe: () => L("Histórico VIP", "VIP history"),
   vip: () => L("Lista VIP", "VIP list"),
   calls: () => L("Tempo em call", "Call time"),
@@ -4011,7 +4012,7 @@ function counts() {
     vipInCall: vips.filter((id) => vipVoice.has(id)).length,
     vipDeletedToday: loadVip().messages.filter((m) => m.deletedAt && m.deletedAt >= today).length,
     contacts: getFirstContacts().length + getCanceledReqs().length,
-    contactsNew: unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")),
+    contactsNew: getSettings().friendsEnabled ? unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")) : 0,
     changes: vipChanges().length,
     changesNew: newChangesCount() + newProfileCount(),
   };
@@ -4036,7 +4037,7 @@ function HomeScreen() {
     h(Group, { header: L("Atividade", "Activity") },
       h(NavRow, { icon: "keyboard", color: "#0a84ff", title: NAMES.typing(), subtitle: L("Quem digitou pra você e não enviou", "Who typed to you and didn't send"), badge: c.typingNew, onClick: () => nav.push({ type: "typing" }) }),
       h(NavRow, { icon: "at", color: "#ff9f0a", title: NAMES.mentions(), subtitle: L("Ghost pings, respostas apagadas, palavras-chave e reações", "Ghost pings, deleted replies, keywords and reactions"), badge: c.mentionsNew, onClick: () => nav.push({ type: "mentions" }) }),
-      h(NavRow, { icon: "userPlus", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou pela primeira vez e pedidos cancelados", "First-time typers and canceled friend requests"), badge: c.contactsNew, onClick: () => nav.push({ type: "contacts" }) }),
+      h(NavRow, { icon: "personBell", color: "#34c759", title: NAMES.friends(), subtitle: getSettings().friendsEnabled ? L("Pedidos de amizade, quem te removeu e quem desistiu", "Friend requests, who removed you and who gave up") : L("Desligado", "Off"), badge: (safe(() => newFriendsCount()) || 0) + c.contactsNew, onClick: () => nav.push({ type: "friends" }) }),
       h(NavRow, { icon: "clock", color: "#ff453a", title: NAMES.snipe(), subtitle: L("Mensagens apagadas e editadas, status e tempo online dos VIPs", "VIPs' deleted & edited messages, status and time online"), badge: c.changesNew, onClick: () => nav.push({ type: "snipe", channelId: SelectedChannelStore?.getChannelId?.() || null }) })),
     h(Group, { header: L("Pessoas", "People") },
       h(NavRow, { icon: "star", color: "#ffcc00", title: NAMES.vip(), subtitle: c.vips ? L(`${c.vipOnline} de ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} em call` : ""}`, `${c.vipOnline} of ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} in a call` : ""}`) : L("Acompanhe pessoas específicas", "Keep an eye on specific people"), onClick: () => nav.push({ type: "vip" }) }),
@@ -4434,7 +4435,8 @@ function FriendsScreen({ tab: initialTab }) {
   const newRem = opened.has("removed") ? 0 : removedAll.filter((r) => r.at > seen.rem).length;
   const rules = getSpamGuilds().length + (getSettings().spamHideBots ? 1 : 0) + (getSettings().spamDeclined ? 1 : 0);
   return h(React.Fragment, null,
-    h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade e quem te removeu", "Friend requests and who removed you") }),
+    h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade, quem te removeu e quem desistiu", "Friend requests, who removed you and who gave up") }),
+    h(Group, null, h(NavRow, { icon: "userPlus", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou e não mandou, e quem cancelou o pedido", "Who typed and didn't send, and who canceled their request"), badge: unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")), onClick: () => nav.push({ type: "contacts" }) })),
     h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
     (tab === "requests" ? pending.length : removedAll.length) ? h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome ou @", "Search by name or @") }) : null,
     tab === "requests" ? h(React.Fragment, null,
@@ -5571,10 +5573,6 @@ function settingsPages() {
           { id: "keywords", label: L("Palavras", "Words"), type: "text", placeholder: L("sorteio, rank, live", "giveaway, rank, live") },
           sw("keywordIgnoreMuted", L("Ignorar servidores silenciados", "Ignore muted servers"))] },
       ] },
-    { id: "contatos", title: NAMES.contacts(), icon: "userPlus", color: "#30d158",
-      sections: [{ items: [
-        sw("firstContactTrack", L("Digitou pela 1ª vez", "First-time typers"), L("Alguém que nunca falou com você digitou e parou sem enviar. Quem envia a mensagem não entra (evita bots).", "Someone who never talked to you typed and stopped without sending. People who do send aren't listed (keeps bots out).")),
-        { ...sw("friendReqTrack", L("Pedidos de amizade cancelados", "Canceled friend requests"), L("Quem te manda pedido e retira. Suas recusas não entram.", "Someone sends you a request and takes it back. Requests you decline aren't listed.")), after: (v) => v && initPendingReqs() }] }] },
     { id: "vip", title: NAMES.vip(), icon: "star", color: "#ffcc00", summary: () => L(`${Object.keys(getVipList()).length} pessoas`, `${Object.keys(getVipList()).length} people`),
       sections: [
         { title: L("Ao adicionar um VIP", "When adding a VIP"), footer: L("Salvo na hora. Vale pra cada pessoa que você adicionar daqui pra frente, e os VIPs que você já tem não mudam.", "Saved right away. Applies to everyone you add from now on, and people already on your list don't change."), items: [
@@ -5628,8 +5626,11 @@ function settingsPages() {
     { id: "ignored", title: L("Ignorados", "Ignored"), icon: "ban", color: "#8e8e93", summary: () => { const ig = getIgnored(); const n = Object.keys(ig.users).length + Object.keys(ig.channels).length + Object.keys(ig.guilds).length; return n ? String(n) : L("Nenhum", "None"); }, sections: [], custom: () => h(IgnoredList) },
     { id: "friends", title: NAMES.friends(), icon: "personBell", color: "#34c759", summary: () => (getSettings().friendsEnabled ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [
-        { footer: L("Mostra um botão no topo com os pedidos de amizade pendentes e quem te removeu da lista de amigos. Não manda aviso, só o contador vermelho.", "Adds a top bar button with your pending friend requests and who removed you as a friend. No notifications, just the red counter."),
-          items: [{ ...sw("friendsEnabled", L("Ativar Solicitações", "Turn on Requests")), after: (v) => { if (v) safe(() => initFriends()); syncDOM(); } }] },
+        { footer: L("Mostra um botão no topo com os pedidos de amizade pendentes, quem te removeu da lista de amigos e quem desistiu de falar com você. Não manda aviso dos pedidos, só o contador vermelho.", "Adds a top bar button with your pending friend requests, who removed you as a friend and who gave up reaching you. No notifications for requests, just the red counter."),
+          items: [{ ...sw("friendsEnabled", L("Ativar Solicitações", "Turn on Requests")), after: (v) => { if (v) { safe(() => initFriends()); if (getSettings().friendReqTrack) safe(() => initPendingReqs()); } syncDOM(); } }] },
+        { title: NAMES.contacts(), items: [
+        sw("firstContactTrack", L("Digitou pela 1ª vez", "First-time typers"), L("Alguém que nunca falou com você digitou e parou sem enviar. Quem envia a mensagem não entra (evita bots).", "Someone who never talked to you typed and stopped without sending. People who do send aren't listed (keeps bots out).")),
+        { ...sw("friendReqTrack", L("Pedidos de amizade cancelados", "Canceled friend requests"), L("Quem te manda pedido e retira. Suas recusas não entram.", "Someone sends you a request and takes it back. Requests you decline aren't listed.")), after: (v) => v && initPendingReqs() }] },
         { title: L("Etiquetas", "Tags"), footer: L("\"Possível bot\": conta nova, sem amigos em comum, sem contas conectadas e sem Nitro. As etiquetas não escondem ninguém; pra isso use o Filtro anti-spam.", "\"Possible bot\": a new account with no mutual friends, no connected accounts and no Nitro. Tags don't hide anyone; use the Spam filter for that."),
           items: [num("friendsNewDays", L("\"Conta nova\" até", "\"New account\" up to"), 1, 3650, 1, L("dias", "days")), num("friendsBotDays", L("\"Possível bot\" até", "\"Possible bot\" up to"), 1, 3650, 1, L("dias", "days"))] },
       ] },
@@ -5653,7 +5654,7 @@ function settingsPages() {
       sections: [{ items: [sw("backupEnabled", L("Backup automático", "Automatic backup")), num("backupDays", L("A cada", "Every"), 1, 60, 1, L("dias", "days")), num("backupKeep", L("Guardar", "Keep"), 1, 10, 1, L("cópias", "copies"))] }], custom: () => h(BackupSection) },
   ];
 }
-const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus", "discreet"], ["privado", "mentions", "contatos", "friends", "vip", "historico", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
+const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus", "discreet"], ["privado", "mentions", "friends", "vip", "historico", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
 
 function SettingsScreen() {
   useBus(settingsBus, vipBus, backupBus, historyBus);
