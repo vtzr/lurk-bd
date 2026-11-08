@@ -37,6 +37,7 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 - **Routine**: a map of the days and hours they're usually online over the last 4 weeks, their most active hours and day, daily average, when they usually come online and leave, this week compared with last week, the best time to talk to them, when they talk the most, whether they're on desktop or mobile, how long each of you usually takes to reply in DMs, and how long you're both online together.
 - **Unusual activity**: optional alerts when a VIP comes online at an hour they almost never do, or stays online much longer than usual.
 - **Shared servers**: an optional alert when a VIP joins or leaves a server you share. The VIP history shows the server, when they joined, when they left and how long they stayed.
+- **Recently removed**: people you take off the list keep their history for 7 days (adjustable). Undo right away, restore later, or delete it for good.
 - Per-VIP choice of which events notify you, including when they send a message in a server, plus default alerts for each new VIP in Settings.
 
 ### 🕘 VIP history
@@ -58,8 +59,8 @@ A single feed (clock button in the top bar) with an unread badge:
 - **First-time typers**: someone who never talked to you typed and stopped without sending. People who do send aren't listed, which keeps spam bots out.
 - **Canceled friend requests**: someone sent you a request and took it back.
 
-### 🔔 Friends
-Off by default; turn it on in **Settings › Friends**. A top bar button with an unread counter (no notifications):
+### 🔔 Requests
+Off by default; turn it on in **Settings › Requests**. A top bar button with an unread counter (no notifications):
 - **New requests**: every pending friend request with when it was sent, account age, mutual friends and mutual servers (hover to see who) and Nitro. Accept, decline or view the profile right from the card.
 - **Tags**: *New account*, *Possible bot* (a very new account with no mutual friends, no connected accounts and no Nitro) and *You declined* for people you already declined who asked again.
 - **Quick filters**: All · Mutual · New account · Bots.
@@ -78,7 +79,7 @@ Total time in calls with each person, kept forever, plus the details of your rec
 - **Focus mode**: silences notifications while you're on Do Not Disturb or playing a game. Everything is still logged.
 - **Storage limits** for every log in one place, so Lurk stays light.
 - **Automatic backups** that you can restore, plus export and import to a file.
-- **Ignore list** for people and groups.
+- **Ignore list** for people, groups, channels, categories and whole servers. Right-click any of them and Lurk stops logging anything that happens there.
 - **Keyboard friendly**: visible focus, arrow keys to switch tabs and quick filter chips on every list.
 - **English and Portuguese (Brazil)**. Follows your Discord language, or pick one.
 - **Choose the icon**: ghost, ninja mask or eye.
@@ -98,10 +99,11 @@ Total time in calls with each person, kept forever, plus the details of your rec
 | Lurk button (top bar) | Opens Lurk: typed & quit, VIPs, mentions, strangers, calls and settings |
 | Clock button (top bar) | VIP history: deleted/edited messages, search, old messages, status changes, people |
 | Direct messages list | How long each VIP has been offline, under their name |
-| Friends button (top bar) | Pending friend requests, spam filter and who removed you |
+| Requests button (top bar) | Pending friend requests, spam filter and who removed you, with search |
 | Server sidebar | Avatar of whoever is typing to you right now; click to open the DM |
 | Right-click a user | See their attempts, add or remove them as VIP, see call time, ignore them |
-| Right-click a group or channel | See typing attempts and deleted/edited messages there |
+| Right-click a group or channel | See typing attempts and deleted/edited messages there, or ignore it |
+| Right-click a server | Ignore the whole server |
 | Settings → Plugins → Lurk ⚙️ | All settings, with search |
 
 Discord only sends the typing signal about every 10 seconds, so typing durations are shown as approximate ranges.
