@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vtzr
- * @version 2.13.0
+ * @version 2.13.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vtzr/lurk-bd
  * @source https://github.com/vtzr/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.13.0";
+const VERSION = "2.13.1";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.13.1", items: [
+    ["improved", "Quem você tinha tirado da Lista VIP antes da versão 2.13.0 agora aparece em Removidos recentemente, com o prazo começando de novo pra você restaurar antes de o histórico ser apagado.", "People you removed from your VIP list before version 2.13.0 now show up under Recently removed, with a fresh deadline to restore them before their history is deleted."],
+  ] },
   { version: "2.13.0", items: [
     ["new", "Lista VIP: quem você remove fica 7 dias em Removidos recentemente, com o histórico guardado. Dá pra desfazer logo depois de remover, restaurar ou apagar na hora, e se adicionar a pessoa de novo nesse prazo, tudo volta. O prazo dá pra mudar em Ajustes › Lista VIP.", "VIP list: people you remove stay under Recently removed for 7 days with their history kept. You can undo right after removing, restore or delete right away, and adding them back in that time brings everything back. You can change the deadline in Settings › VIP list."],
     ["improved", "Ao remover pelo perfil do VIP, dá pra escolher apagar todo o histórico na hora.", "When removing from a VIP's page, you can choose to delete all their history right away."],
@@ -739,6 +742,32 @@ function purgeVipData(uid) {
   const r = getRemovedVips();
   if (r[uid]) { delete r[uid]; Data.save(k("vipRemoved"), r); }
   vipBus.emit();
+}
+function migrateOrphanVips() {
+  if (Data.load(k("vipOrphansDone"))) return;
+  const me = myId();
+  if (!me || me === "unknown") return;
+  const ids = new Set();
+  const folderName = {};
+  const d = loadVip();
+  for (const x of [...d.events, ...d.messages, ...(d.voice || [])]) if (x?.userId) ids.add(x.userId);
+  for (const o of [getNotes(), getDates(), getReplies(), getProfileMedia()]) Object.keys(o || {}).forEach((id) => ids.add(id));
+  for (const e of getProfileLog()) if (e?.userId) ids.add(e.userId);
+  safe(() => { const root = mediaRoot(); if (Files.exists(root)) for (const n of Files.list(root)) { const m = n.match(/^(.*) \((\d{17,20})\)$/); if (m) { ids.add(m[2]); folderName[m[2]] = m[1]; } } });
+  const list = getVipList();
+  const r = getRemovedVips();
+  const snap = getIdentitySnap();
+  let added = 0;
+  for (const id of ids) {
+    if (!/^\d{17,20}$/.test(id) || id === me || list[id] || r[id]) continue;
+    const u = UserStore?.getUser?.(id);
+    const label = u?.globalName || u?.username || snap[id]?.globalName || snap[id]?.username || folderName[id] || id;
+    r[id] = { at: Date.now(), entry: { label } };
+    added++;
+  }
+  if (added) Data.save(k("vipRemoved"), r);
+  Data.save(k("vipOrphansDone"), Date.now());
+  if (added) vipBus.emit();
 }
 function purgeExpiredVips() {
   const limit = removedDays() * DAY;
@@ -6428,6 +6457,7 @@ module.exports = class Lurk {
     Scheduler.once("identities", 10000, () => checkIdentities(true));
     Scheduler.every("watchProfile", 15 * 60000, () => checkWatchedProfile(), 20000);
     Scheduler.every("servers", SERVER_EVERY, () => checkServers(), 90000);
+    Scheduler.once("vipOrphans", 20000, () => migrateOrphanVips());
     Scheduler.every("vipPurge", 3600000, () => purgeExpiredVips(), 60000);
     freqCache = null;
     replyCache = null;
