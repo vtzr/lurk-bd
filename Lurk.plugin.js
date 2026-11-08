@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vtzr
- * @version 2.14.0
+ * @version 2.15.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vtzr/lurk-bd
  * @source https://github.com/vtzr/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.14.0";
+const VERSION = "2.15.0";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,10 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.15.0", items: [
+    ["new", "Quando um VIP é pego invisível, o \"offline há…\" vira \"visto invisível há…\", contando desde a última atividade dele. Aparece nas mensagens diretas, no topo da conversa, na Lista VIP e no perfil do VIP. Depois de 30 minutos sem atividade, volta pro \"offline há…\" de antes.", "When a VIP is caught invisible, \"offline for…\" becomes \"seen invisible … ago\", counting from their last activity. It shows in your DM list, at the top of the conversation, in the VIP list and on the VIP's page. After 30 minutes with no activity, it goes back to \"offline for…\"."],
+    ["improved", "O Lurk agora também percebe que um VIP está invisível quando ele entra em call, reage, edita ou apaga uma mensagem, além de digitar e mandar mensagem.", "Lurk now also notices a VIP is invisible when they join a call, react, edit or delete a message, besides typing and sending messages."],
+  ] },
   { version: "2.14.0", items: [
     ["improved", "\"Desconhecidos\" agora se chama \"Desistiram\" e fica dentro de Solicitações, junto com os pedidos de amizade. As duas coisas ligam e desligam juntas em Ajustes › Solicitações, e a tela inicial mostra só Solicitações.", "\"Strangers\" is now called \"Gave up\" and lives inside Requests, next to friend requests. Both turn on and off together in Settings › Requests, and the home screen shows just Requests."],
     ["new", "Desistiram: quem desiste mais de uma vez ganha uma etiqueta como \"2ª vez\", e tocar nela mostra as vezes anteriores.", "Gave up: people who give up more than once get a tag like \"2nd time\", and tapping it shows the earlier times."],
@@ -1655,10 +1659,38 @@ function guildInfo(ch) {
   return { guildId: ch?.guild_id || null, guildName: safe(() => GuildStore?.getGuild?.(ch?.guild_id)?.name) || null, channelName: ch?.name || null };
 }
 
+const INVIS_WINDOW = 30 * 60000;
+let invisCache = null;
+let invisTimer = null;
+const getInvisAct = () => (invisCache ??= Data.load(k("vipInvisAct")) || {});
+function saveInvisSoon() { if (invisTimer) return; invisTimer = setTimeout(() => { invisTimer = null; Data.save(k("vipInvisAct"), getInvisAct()); }, 3000); }
+function clearInvisible(uid) { const a = getInvisAct(); if (a[uid]) { delete a[uid]; saveInvisSoon(); } }
+function invisibleAt(uid) {
+  if (!isVip(uid) || rawPresence(uid)?.status !== "offline") return null;
+  if (vipVoice.has(uid) && getInvisAct()[uid]) return Date.now();
+  const at = getInvisAct()[uid];
+  return at && Date.now() - at < INVIS_WINDOW ? at : null;
+}
+const INVIS_VIA = {
+  typing: () => [L("digitando", "typing"), L("Digitando", "Typing")],
+  message: () => [L("mandou mensagem", "sent a message"), L("Mandou mensagem", "Sent a message")],
+  edit: () => [L("editou uma mensagem", "edited a message"), L("Editou uma mensagem", "Edited a message")],
+  delete: () => [L("apagou uma mensagem", "deleted a message"), L("Apagou uma mensagem", "Deleted a message")],
+  reaction: () => [L("reagiu a uma mensagem", "reacted to a message"), L("Reagiu a uma mensagem", "Reacted to a message")],
+  voice: () => [L("em call", "in a call"), L("Em call", "In a call")],
+};
+function invisViaText(e, cap) {
+  const [low, up] = (INVIS_VIA[e.via] || INVIS_VIA.message)();
+  const where = e.where ? L(` em ${e.where}`, ` in ${e.where}`) : e.via === "typing" || e.via === "message" ? L(" pra você", " to you") : "";
+  return (cap ? up : low) + where;
+}
 function checkInvisible(userId, via, where) {
   if (!isVip(userId) || !isFriendOf(userId)) return;
   const p = rawPresence(userId);
   if (!p || p.status !== "offline") return;
+  getInvisAct()[userId] = Date.now();
+  saveInvisSoon();
+  safe(() => placeLastSeen());
   const last = invisibleThrottle.get(userId) || 0;
   if (Date.now() - last < 5 * 60000) return;
   invisibleThrottle.set(userId, Date.now());
@@ -1666,7 +1698,7 @@ function checkInvisible(userId, via, where) {
   const s = getSettings();
   if (vipFlag(userId, "notifyInvisible")) {
     notify({
-      title: L("Lista VIP", "VIP list"), text: L(`${nameOf(userId)} está invisível (${via === "typing" ? "digitando" : "mandou mensagem"}${where ? ` em ${where}` : ""})`, `${nameOf(userId)} is invisible (${via === "typing" ? "typing" : "sent a message"}${where ? ` in ${where}` : ""})`),
+      title: L("Lista VIP", "VIP list"), text: L(`${nameOf(userId)} está invisível (${invisViaText({ via, where }, false)})`, `${nameOf(userId)} is invisible (${invisViaText({ via, where }, false)})`),
       icon: avatarOf(UserStore?.getUser?.(userId), userId), toast: s.vipToast, desktop: s.vipDesktop, sound: s.vipSound,
     });
   }
@@ -1676,6 +1708,7 @@ function onTypingStart(action) {
   try {
     const { channelId, userId } = action || {};
     if (!channelId || !userId || userId === myId()) return;
+    if (isVip(userId) && !isIgnoredPlace(channelId, action.guildId) && getInvisAct()[userId] && rawPresence(userId)?.status === "offline") { getInvisAct()[userId] = Date.now(); saveInvisSoon(); }
     const info = classify(channelId, userId);
     if (!info) return;
     const s = getSettings();
@@ -1824,6 +1857,7 @@ function onMessageUpdate(action) {
     const last = m.edits.length ? m.edits[m.edits.length - 1].content : m.content;
     if (last === msg.content) return;
     m.edits.push({ at: Date.parse(msg.edited_timestamp) || Date.now(), content: msg.content });
+    safe(() => checkInvisible(m.userId, "edit", m.guildId && m.channelName ? `#${m.channelName}` : null));
     saveVipSoon("messages");
   } catch (e) { Logger.error("MESSAGE_UPDATE", e); }
 }
@@ -1831,7 +1865,7 @@ function markDeleted(ids) {
   const d = loadVip();
   let changed = false;
   for (const m of d.messages) {
-    if (!m.deletedAt && ids.includes(m.id)) { m.deletedAt = Date.now(); changed = true; }
+    if (!m.deletedAt && ids.includes(m.id)) { m.deletedAt = Date.now(); changed = true; safe(() => checkInvisible(m.userId, "delete", m.guildId && m.channelName ? `#${m.channelName}` : null)); }
   }
   if (changed) saveVipSoon("messages");
 }
@@ -1954,7 +1988,9 @@ function pushMentionEvent(ev) {
 const emojiKey = (e) => e?.id || e?.name || "?";
 function onReactionAdd(a) {
   try {
-    if (!getSettings().mentionReaction || !a?.userId || a.userId === myId() || isIgnoredPlace(a.channelId, a.guildId)) return;
+    if (!a?.userId || a.userId === myId() || isIgnoredPlace(a.channelId, a.guildId)) return;
+    if (isVip(a.userId)) safe(() => checkInvisible(a.userId, "reaction", a.guildId ? (() => { const n = ChannelStore?.getChannel?.(a.channelId)?.name; return n ? `#${n}` : null; })() : null));
+    if (!getSettings().mentionReaction) return;
     const msg = safe(() => MessageStore?.getMessage?.(a.channelId, a.messageId));
     const author = a.messageAuthorId || msg?.author?.id;
     if (author !== myId()) return;
@@ -2022,7 +2058,7 @@ function closeVoice(userId, cut) {
 function initVoiceFor(id) {
   if (!getSettings().vipTrackVoice) return;
   const vs = normVS(safe(() => VoiceStateStore?.getVoiceStateForUser?.(id)));
-  if (vs?.channelId) openVoice(id, { ...vs, userId: id }, true);
+  if (vs?.channelId) { openVoice(id, { ...vs, userId: id }, true); safe(() => checkInvisible(id, "voice", null)); }
 }
 function initVoice() {
   vipVoice.clear();
@@ -2083,6 +2119,7 @@ function processVoiceStates(list) {
         if (cur) closeVoice(uid);
         if (vs.channelId) {
           const v = openVoice(uid, vs, false);
+          safe(() => checkInvisible(uid, "voice", placeLabel(v)));
           if (vipFlag(uid, "notifyVoice")) {
             notify({
               title: L("Lista VIP", "VIP list"), text: L(`${nameOf(uid)} entrou em call: ${placeLabel(v)}${v.peers.size ? ` (com ${v.peers.size} ${plural(v.peers.size, "pessoa", "pessoas")})` : ""}`, `${nameOf(uid)} joined a call: ${placeLabel(v)}${v.peers.size ? ` (with ${v.peers.size} ${plural(v.peers.size, "person", "people")})` : ""}`),
@@ -2299,6 +2336,7 @@ let seenCache = null;
 const getSeen = () => (seenCache ??= Data.load(k("vipSeen")) || {});
 function saveSeen() { Data.save(k("vipSeen"), seenCache || {}); }
 function markSeen2(id, online) {
+  if (online) clearInvisible(id);
   const all = getSeen();
   const cur = all[id] || {};
   all[id] = online ? { ...cur, state: "online", onlineAt: Date.now() } : { ...cur, state: "offline", offlineAt: Date.now() };
@@ -2306,6 +2344,7 @@ function markSeen2(id, online) {
 }
 function initSeen() {
   seenCache = null;
+  invisCache = null;
   const all = getSeen();
   const events = loadVip().events;
   for (const id of Object.keys(getVipList())) {
@@ -2328,6 +2367,8 @@ function initSeen() {
 function lastSeenInfo(id) {
   const st = rawPresence(id)?.status;
   if (!st) return null;
+  const inv = invisibleAt(id);
+  if (inv) return { kind: "invisible", at: inv };
   const e = getSeen()[id];
   if (!e) return null;
   if (!isOnlineStatus(st)) return e.state === "offline" && e.offlineAt ? { kind: "offline", at: e.offlineAt } : null;
@@ -2336,6 +2377,7 @@ function lastSeenInfo(id) {
 }
 function fmtSeen({ kind, at }) {
   const diff = Date.now() - at;
+  if (kind === "invisible") return diff < 60000 ? L("visto invisível agora", "seen invisible now") : L(`visto invisível há ${Math.floor(diff / 60000)} min`, `seen invisible ${Math.floor(diff / 60000)}m ago`);
   if (diff < 60000) return L(`${kind} agora`, `${kind} now`);
   if (diff < 3600000) { const m = Math.floor(diff / 60000); return L(`${kind} há ${m} min`, `${kind} for ${m}m`); }
   if (diff < DAY) { const hh = Math.floor(diff / 3600000); return L(`${kind} há ${hh} h`, `${kind} for ${hh}h`); }
@@ -2343,7 +2385,7 @@ function fmtSeen({ kind, at }) {
   const d = new Date(at);
   return L(`${kind} desde ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`, `${kind} since ${pad(d.getMonth() + 1)}/${pad(d.getDate())}`);
 }
-const fmtSeenTitle = ({ kind, at }) => `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
+const fmtSeenTitle = ({ kind, at }) => kind === "invisible" ? L(`Aparece offline, mas teve atividade às ${fmtHM(at)}`, `Shows offline, but was active at ${fmtHM(at)}`) : `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 function initPresenceCache() {
   presenceCache.clear();
   for (const id of Object.keys(getVipList())) presenceCache.set(id, rawPresence(id));
@@ -4669,7 +4711,7 @@ function StatusFeed() {
       const name = nameOf(e.userId, list[e.userId] || {});
       const text = e.type === "invisible" ? L("visto invisível", "seen while invisible") : (PRESENCE_VERB[e.to] || e.to).replace(/^./, (c) => c.toLowerCase());
       const meta = e.type === "invisible"
-        ? (e.via === "typing" ? L(`digitando ${e.where ? `em ${e.where}` : "pra você"}`, `typing ${e.where ? `in ${e.where}` : "to you"}`) : L(`mandou mensagem ${e.where ? `em ${e.where}` : "pra você"}`, `sent a message ${e.where ? `in ${e.where}` : "to you"}`))
+        ? invisViaText(e, false)
         : joinNodes([durationOf(e), e.devices?.length && e.to !== "offline" ? h(Devices, { devices: e.devices }) : null]);
       return h(Flash, { key: `${e.userId}-${e.at}-${i}`, isNew: e.at > seenSnap("vipHist:status") }, h("button", { className: "dmtt-row", onClick: () => nav.push({ type: "vipPerson", userId: e.userId }) },
         h("span", { className: `dmtt-tl-dot ${e.type === "invisible" ? "dmtt-dot-invisible" : `dmtt-dot-${e.to}`}` }),
@@ -4700,6 +4742,7 @@ function VipPeopleList() {
         const changes = d.messages.filter((m) => m.userId === id && (m.deletedAt || m.edits?.length)).length;
         const now = lv ? h("span", { className: "dmtt-live-inline" }, L("Em call agora", "In a call now"))
           : p && p.status !== "offline" ? h(StatusWithDevices, { text: L(`${STATUS_PT[p.status]} agora`, `${STATUS_PT[p.status]} now`), devices: p.devices })
+          : invisibleAt(id) ? (() => { const t = fmtSeen({ kind: "invisible", at: invisibleAt(id) }); return t.charAt(0).toUpperCase() + t.slice(1); })()
           : lastOff ? L(`Visto por último ${relTime(lastOff.at)}`, `Last seen ${relTime(lastOff.at)}`)
           : friend ? "Offline" : L("Sem status (não é amigo)", "No status (not a friend)");
         return h("button", { key: id, className: "dmtt-row", onClick: () => nav.push({ type: "vipPerson", userId: id }) },
@@ -4949,6 +4992,7 @@ function VipScreen() {
       let sub;
       if (lv) sub = [h("span", { className: "dmtt-live-inline" }, L(`Em call · ${lv.guildId ? `#${lv.channelName || "canal"}` : "privado"}`, `In a call · ${lv.guildId ? `#${lv.channelName || "channel"}` : "DM"}`))];
       else if (p && p.status !== "offline") sub = [h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }), last && last.to === p.status ? L(`há ${fmtDur(Date.now() - last.at)}`, `for ${fmtDur(Date.now() - last.at)}`) : null];
+      else if (invisibleAt(id)) sub = [(() => { const t = fmtSeen({ kind: "invisible", at: invisibleAt(id) }); return t.charAt(0).toUpperCase() + t.slice(1); })()];
       else if (last?.to === "offline") sub = [L(`Visto por último ${relTime(last.at)}`, `Last seen ${relTime(last.at)}`)];
       else sub = [friend ? "Offline" : L("Sem status (não é amigo)", "No status (not a friend)")];
       if (deleted) sub.push(L(`${deleted} ${plural(deleted, "apagada", "apagadas")}`, `${deleted} deleted`));
@@ -4972,7 +5016,7 @@ function ActivityList({ id, events }) {
     ? h("div", { key: `${e.at}-${i}`, className: "dmtt-row" },
         h("span", { className: "dmtt-tl-dot dmtt-dot-invisible" }),
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, h("span", { className: "dmtt-num dmtt-time-lead" }, fmtHM(e.at)), L("Visto invisível", "Seen while invisible")),
-          h("span", { className: "dmtt-row-sub" }, e.via === "typing" ? L(`Digitando ${e.where ? `em ${e.where}` : "pra você"}`, `Typing ${e.where ? `in ${e.where}` : "to you"}`) : L(`Mandou mensagem ${e.where ? `em ${e.where}` : "pra você"}`, `Sent a message ${e.where ? `in ${e.where}` : "to you"}`))))
+          h("span", { className: "dmtt-row-sub" }, invisViaText(e, true))))
     : h("div", { key: `${e.at}-${i}`, className: "dmtt-row" },
         h("span", { className: `dmtt-tl-dot dmtt-dot-${e.to}` }),
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, h("span", { className: "dmtt-num dmtt-time-lead" }, fmtHM(e.at)), PRESENCE_VERB[e.to] || e.to),
@@ -5476,7 +5520,8 @@ function VipPersonScreen({ userId: id }) {
   const typing = getHistory().filter((r) => r.userId === id).sort((a, b) => b.lastTypingAt - a.lastTypingAt);
   const mine = d.messages.filter((m) => m.userId === id);
   const invis = d.events.filter((e) => e.userId === id && e.type === "invisible" && e.at >= startOfDay(Date.now())).length;
-  const chips = [friend ? L("Amigo", "Friend") : friend === false ? L("Não é amigo", "Not a friend") : null, vipVoice.has(id) ? L("Em call agora", "In a call now") : p && p.status !== "offline" ? h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }) : null].filter(Boolean);
+  const invAt = invisibleAt(id);
+  const chips = [friend ? L("Amigo", "Friend") : friend === false ? L("Não é amigo", "Not a friend") : null, invAt ? (() => { const t = fmtSeen({ kind: "invisible", at: invAt }); return t.charAt(0).toUpperCase() + t.slice(1); })() : null, vipVoice.has(id) ? L("Em call agora", "In a call now") : p && p.status !== "offline" ? h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }) : null].filter(Boolean);
   const dm = ChannelStore?.getDMFromUserId?.(id);
   const toggles = vipAlertList();
   const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
