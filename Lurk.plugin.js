@@ -54,6 +54,7 @@ const UPDATE_KEYS = [
 const CHANGELOG = [
   { version: "2.13.1", items: [
     ["improved", "\"Desconhecidos\" agora se chama \"Desistiram\" e fica dentro de Solicitações, junto com os pedidos de amizade. As duas coisas ligam e desligam juntas em Ajustes › Solicitações, e a tela inicial mostra só Solicitações.", "\"Strangers\" is now called \"Gave up\" and lives inside Requests, next to friend requests. Both turn on and off together in Settings › Requests, and the home screen shows just Requests."],
+    ["improved", "O contador do botão de Solicitações agora inclui as novidades de Desistiram.", "The Requests button counter now includes what's new in Gave up."],
     ["fixed", "Pedidos cancelados: o card ficou mais claro, com quando a pessoa pediu e depois de quanto tempo cancelou em linhas separadas. Pedidos feitos há mais de 24 horas mostram a data junto com o horário.", "Canceled requests: the card is clearer, with when they sent it and how long until they canceled on separate lines. Requests sent more than 24 hours ago show the date along with the time."],
     ["improved", "Quem você tinha tirado da Lista VIP antes da versão 2.13.0 agora aparece em Removidos recentemente, com o prazo começando de novo pra você restaurar antes de o histórico ser apagado.", "People you removed from your VIP list before version 2.13.0 now show up under Recently removed, with a fresh deadline to restore them before their history is deleted."],
   ] },
@@ -648,6 +649,7 @@ function markSeenKeys(keys) {
   seenBus.emit();
   safe(() => updateBadge());
   safe(() => updateSnipeBadge());
+  safe(() => updateFriendsBadge());
 }
 let seenSnapMap = null;
 function seenSnap(key) {
@@ -1259,7 +1261,7 @@ function enforceLimits() {
 const getPendingReqs = () => Data.load(k("reqPending")) || {};
 const savePendingReqs = (o) => Data.save(k("reqPending"), o);
 const getCanceledReqs = () => (Data.load(k("reqCanceled")) || []).filter((r) => r?.userId && r?.at);
-function saveCanceledReqs(list) { Data.save(k("reqCanceled"), list.slice(0, 2000)); reqBus.emit(); updateBadge(); }
+function saveCanceledReqs(list) { Data.save(k("reqCanceled"), list.slice(0, 2000)); reqBus.emit(); updateBadge(); safe(() => updateFriendsBadge()); }
 
 const MENTION_FILE = "LurkMentions";
 const mentionData = { owner: null, events: [], timer: null, dirty: false };
@@ -2653,7 +2655,8 @@ function friendRequests() {
 function newFriendsCount() {
   if (!getSettings().friendsEnabled) return 0;
   const rs = getReqSeen(), ms = getRemovedSeen();
-  return friendRequests().filter((r) => !r.spam && r.sentAt > rs).length + getRemovedFriends().filter((r) => r.at > ms).length;
+  return friendRequests().filter((r) => !r.spam && r.sentAt > rs).length + getRemovedFriends().filter((r) => r.at > ms).length
+    + (safe(() => unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests"))) || 0);
 }
 function currentFriendIds() {
   return relEntries().filter(([, t]) => t === REL_FRIEND).map(([id]) => id);
@@ -3460,7 +3463,7 @@ function snipeInterceptor(action) {
 const knownContacts = new Set();
 const firstThrottle = new Map();
 const getFirstContacts = () => (Data.load(k("firstContacts")) || []).filter((e) => e.via !== "message");
-function saveFirstContacts(list) { Data.save(k("firstContacts"), list.slice(0, 2000)); reqBus.emit(); updateBadge(); }
+function saveFirstContacts(list) { Data.save(k("firstContacts"), list.slice(0, 2000)); reqBus.emit(); updateBadge(); safe(() => updateFriendsBadge()); }
 function initKnownContacts() {
   knownContacts.clear();
   for (const id of Data.load(k("knownContacts")) || []) knownContacts.add(id);
@@ -4037,7 +4040,7 @@ function HomeScreen() {
     h(Group, { header: L("Atividade", "Activity") },
       h(NavRow, { icon: "keyboard", color: "#0a84ff", title: NAMES.typing(), subtitle: L("Quem digitou pra você e não enviou", "Who typed to you and didn't send"), badge: c.typingNew, onClick: () => nav.push({ type: "typing" }) }),
       h(NavRow, { icon: "at", color: "#ff9f0a", title: NAMES.mentions(), subtitle: L("Ghost pings, respostas apagadas, palavras-chave e reações", "Ghost pings, deleted replies, keywords and reactions"), badge: c.mentionsNew, onClick: () => nav.push({ type: "mentions" }) }),
-      h(NavRow, { icon: "personBell", color: "#34c759", title: NAMES.friends(), subtitle: getSettings().friendsEnabled ? L("Pedidos de amizade, quem te removeu e quem desistiu", "Friend requests, who removed you and who gave up") : L("Desligado", "Off"), badge: (safe(() => newFriendsCount()) || 0) + c.contactsNew, onClick: () => nav.push({ type: "friends" }) }),
+      h(NavRow, { icon: "personBell", color: "#34c759", title: NAMES.friends(), subtitle: getSettings().friendsEnabled ? L("Pedidos de amizade, quem te removeu e quem desistiu", "Friend requests, who removed you and who gave up") : L("Desligado", "Off"), badge: safe(() => newFriendsCount()) || 0, onClick: () => nav.push({ type: "friends" }) }),
       h(NavRow, { icon: "clock", color: "#ff453a", title: NAMES.snipe(), subtitle: L("Mensagens apagadas e editadas, status e tempo online dos VIPs", "VIPs' deleted & edited messages, status and time online"), badge: c.changesNew, onClick: () => nav.push({ type: "snipe", channelId: SelectedChannelStore?.getChannelId?.() || null }) })),
     h(Group, { header: L("Pessoas", "People") },
       h(NavRow, { icon: "star", color: "#ffcc00", title: NAMES.vip(), subtitle: c.vips ? L(`${c.vipOnline} de ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} em call` : ""}`, `${c.vipOnline} of ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} in a call` : ""}`) : L("Acompanhe pessoas específicas", "Keep an eye on specific people"), onClick: () => nav.push({ type: "vip" }) }),
