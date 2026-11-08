@@ -54,6 +54,7 @@ const UPDATE_KEYS = [
 const CHANGELOG = [
   { version: "2.13.1", items: [
     ["improved", "\"Desconhecidos\" agora se chama \"Desistiram\" e fica dentro de Solicitações, junto com os pedidos de amizade. As duas coisas ligam e desligam juntas em Ajustes › Solicitações, e a tela inicial mostra só Solicitações.", "\"Strangers\" is now called \"Gave up\" and lives inside Requests, next to friend requests. Both turn on and off together in Settings › Requests, and the home screen shows just Requests."],
+    ["improved", "Pedidos cancelados: tocar no card abre o perfil da pessoa.", "Canceled requests: tapping a card opens the person's profile."],
     ["improved", "O contador do botão de Solicitações agora inclui as novidades de Desistiram.", "The Requests button counter now includes what's new in Gave up."],
     ["fixed", "Pedidos cancelados: o card ficou mais claro, com quando a pessoa pediu e depois de quanto tempo cancelou em linhas separadas. Pedidos feitos há mais de 24 horas mostram a data junto com o horário.", "Canceled requests: the card is clearer, with when they sent it and how long until they canceled on separate lines. Requests sent more than 24 hours ago show the date along with the time."],
     ["improved", "Quem você tinha tirado da Lista VIP antes da versão 2.13.0 agora aparece em Removidos recentemente, com o prazo começando de novo pra você restaurar antes de o histórico ser apagado.", "People you removed from your VIP list before version 2.13.0 now show up under Recently removed, with a fresh deadline to restore them before their history is deleted."],
@@ -4265,14 +4266,14 @@ function ContactsScreen({ initial = "first" }) {
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveFirstContacts(getFirstContacts().filter((x) => !(x.userId === e.userId && x.at === e.at))) }, h(Icon, { d: ICON_X, size: 12 })),
           h("button", { className: "dmtt-link", onClick: () => openDM(e.channelId, e.userId, false) }, L("Abrir", "Open")))) })
         : h(Empty, { icon: "userPlus", title: L("Ninguém novo por aqui", "No one new yet") }, L("Quando alguém que nunca falou com você digitar e parar sem enviar, aparece aqui.", "When someone who never talked to you types and stops without sending, it shows up here.")))
-      : (reqs.length ? h(DayList, { items: reqs, getTime: (r) => r.canceledAt || r.at || 0, render: (r, i) => h(Flash, { key: `${r.userId}-${r.canceledAt}-${i}`, isNew: (r.canceledAt || 0) > seenSnap("contacts:requests") }, h("div", { className: "dmtt-row dmtt-row-top" },
+      : (reqs.length ? h(DayList, { items: reqs, getTime: (r) => r.canceledAt || r.at || 0, render: (r, i) => h(Flash, { key: `${r.userId}-${r.canceledAt}-${i}`, isNew: (r.canceledAt || 0) > seenSnap("contacts:requests") }, h("div", { className: "dmtt-row dmtt-row-top dmtt-row-tap", role: "button", tabIndex: 0, title: UserProfileModal ? L("Ver perfil", "View profile") : L("Abrir conversa", "Open DM"), onClick: () => openProfile(r.userId), onKeyDown: (ev) => { if (ev.target === ev.currentTarget && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); openProfile(r.userId); } } },
           h(Avatar, { userId: r.userId, url: r.avatarURL }),
           h("span", { className: "dmtt-row-main" },
             h("span", { className: "dmtt-row-title" }, nameOf(r.userId, r), r.username ? h("span", { className: "dmtt-row-user" }, ` @${r.username}`) : null),
             h("span", { className: "dmtt-row-sub" }, Date.now() - r.at < DAY ? L(`Pediu às ${fmtHM(r.at)}`, `Sent at ${fmtHM(r.at)}`) : L(`Pediu em ${fmtDate(r.at).slice(0, 10)}, ${fmtHM(r.at)}`, `Sent on ${fmtDate(r.at).slice(0, 10)}, ${fmtHM(r.at)}`)),
             h("span", { className: "dmtt-row-sub" }, r.canceledAt ? L(`Cancelou após ${fmtDur(r.canceledAt - r.at)}`, `Canceled after ${fmtDur(r.canceledAt - r.at)}`) : L("Sumiu enquanto o plugin estava desligado", "Gone while the plugin was off"))),
           h("span", { className: "dmtt-row-time" }, r.canceledAt ? relTime(r.canceledAt) : ""),
-          h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))) }, h(Icon, { d: ICON_X, size: 12 })))) })
+          h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: (ev) => { ev.stopPropagation(); saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))); } }, h(Icon, { d: ICON_X, size: 12 })))) })
         : h(Empty, { icon: "userPlus", title: L("Nenhum pedido cancelado", "No canceled requests") }, pendingText)),
     (seg === "first" ? first.length : reqs.length) ? h(Group, { footer: seg === "requests" ? `${pendingText} ${L("Suas recusas não entram.", "Requests you declined aren't listed.")}` : null },
       h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => (seg === "first" ? saveFirstContacts([]) : saveCanceledReqs([]))) })) : null);
@@ -6166,6 +6167,8 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 6px; background: var(--c-fill2); color: var(--c-text); border: none; white-space: nowrap; flex: none; font-family: inherit; }
 .dmtt-tag.is-red { background: rgba(255,69,58,.16); color: #ff6961; }
 .dmtt-tag.is-btn { cursor: pointer; }
+.dmtt-row-tap { cursor: pointer; }
+.dmtt-row-tap:hover { background: var(--c-hover); }
 
 .dmtt-hero { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 16px 0 4px; text-align: center; }
 .dmtt-hero-name { margin-top: 8px; font-size: 21px; font-weight: 700; color: var(--c-strong); }
