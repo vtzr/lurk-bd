@@ -3633,6 +3633,7 @@ const SI = {
   keyboard: "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8",
   at: "M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1",
   userPlus: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6",
+  userX: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16.5 7.5l6 6M22.5 7.5l-6 6",
   star: "M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z",
   headset: "M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3",
   trash: "M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6",
@@ -4291,7 +4292,7 @@ function ContactsScreen({ initial = "first" }) {
           h("span", { className: "dmtt-row-time" }, fmtHM(e.at)),
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveFirstContacts(getFirstContacts().filter((x) => !(x.userId === e.userId && x.at === e.at))) }, h(Icon, { d: ICON_X, size: 12 })),
           h("button", { className: "dmtt-link", onClick: () => openDM(e.channelId, e.userId, false) }, L("Abrir", "Open")))) })
-        : h(Empty, { icon: "userPlus", title: L("Ninguém novo por aqui", "No one new yet") }, L("Quando alguém que nunca falou com você digitar e parar sem enviar, aparece aqui.", "When someone who never talked to you types and stops without sending, it shows up here.")))
+        : h(Empty, { icon: "userX", title: L("Ninguém novo por aqui", "No one new yet") }, L("Quando alguém que nunca falou com você digitar e parar sem enviar, aparece aqui.", "When someone who never talked to you types and stops without sending, it shows up here.")))
       : (reqs.length ? h(DayList, { items: reqs, getTime: (r) => r.canceledAt || r.at || 0, render: (r, i) => h(Flash, { key: `${r.userId}-${r.canceledAt}-${i}`, isNew: (r.canceledAt || 0) > seenSnap("contacts:requests") }, h("div", { className: "dmtt-row dmtt-row-top dmtt-row-tap", role: "button", tabIndex: 0, title: UserProfileModal ? L("Ver perfil", "View profile") : L("Abrir conversa", "Open DM"), onClick: () => openProfile(r.userId), onKeyDown: (ev) => { if (ev.target === ev.currentTarget && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); openProfile(r.userId); } } },
           h(Avatar, { userId: r.userId, url: r.avatarURL }),
           h("span", { className: "dmtt-row-main" },
@@ -4301,7 +4302,7 @@ function ContactsScreen({ initial = "first" }) {
             h(GaveUpRepeat, { userId: r.userId, at: r.canceledAt || r.at })),
           h("span", { className: "dmtt-row-time" }, r.canceledAt ? relTime(r.canceledAt) : ""),
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: (ev) => { ev.stopPropagation(); saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))); } }, h(Icon, { d: ICON_X, size: 12 })))) })
-        : h(Empty, { icon: "userPlus", title: L("Nenhum pedido cancelado", "No canceled requests") }, pendingText)),
+        : h(Empty, { icon: "userX", title: L("Nenhum pedido cancelado", "No canceled requests") }, pendingText)),
     (seg === "first" ? first.length : reqs.length) ? h(Group, { footer: seg === "requests" ? `${pendingText} ${L("Suas recusas não entram.", "Requests you declined aren't listed.")}` : null },
       h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => (seg === "first" ? saveFirstContacts([]) : saveCanceledReqs([]))) })) : null);
 }
@@ -4467,7 +4468,7 @@ function FriendsScreen({ tab: initialTab }) {
   const rules = getSpamGuilds().length + (getSettings().spamHideBots ? 1 : 0) + (getSettings().spamDeclined ? 1 : 0);
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade, quem te removeu e quem desistiu", "Friend requests, who removed you and who gave up") }),
-    h(Group, null, h(NavRow, { icon: "userPlus", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou e não mandou, e quem cancelou o pedido", "Who typed and didn't send, and who canceled their request"), badge: unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")), onClick: () => nav.push({ type: "contacts" }) })),
+    h(Group, null, h(NavRow, { icon: "userX", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou e não mandou, e quem cancelou o pedido", "Who typed and didn't send, and who canceled their request"), badge: unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")), onClick: () => nav.push({ type: "contacts" }) })),
     h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
     (tab === "requests" ? pending.length : removedAll.length) ? h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome ou @", "Search by name or @") }) : null,
     tab === "requests" ? h(React.Fragment, null,
