@@ -55,10 +55,6 @@ A single feed (clock button in the top bar) with an unread badge:
 - **Removed reactions** on your messages.
 - **Keywords**: whole-word, case- and accent-insensitive, with an option to ignore muted servers.
 
-### 👤 Strangers
-- **First-time typers**: someone who never talked to you typed and stopped without sending. People who do send aren't listed, which keeps spam bots out.
-- **Canceled friend requests**: someone sent you a request and took it back.
-
 ### 🔔 Requests
 Off by default; turn it on in **Settings › Requests**. A top bar button with an unread counter (no notifications):
 - **New requests**: every pending friend request with when it was sent, account age, mutual friends and mutual servers (hover to see who) and Nitro. Accept, decline or view the profile right from the card.
@@ -67,6 +63,11 @@ Off by default; turn it on in **Settings › Requests**. A top bar button with a
 - **Spam filter**: pick servers to ignore and requests from their members go to **Spam** (right at the top of the list), even if they leave the server afterwards. Optionally send possible bots, or people you already declined, to Spam too.
 - **Bulk actions**: decline all possible bots, or everything in Spam, up to 25 at a time with a few seconds between each.
 - **Removed you**: people who unfriended you, including while your Discord was closed. Click a card to open the DM.
+- **Gave up**: people who started reaching out and gave up.
+  - **First-time typers**: someone who never talked to you typed and stopped without sending. People who do send aren't listed, which keeps spam bots out.
+  - **Canceled friend requests**: someone sent you a request and took it back. Click a card to open their profile.
+  - People who give up more than once get a "2nd time" tag that shows the earlier times.
+- **Search** by name or @ in new requests, Spam and who removed you.
 
 ### 📞 Call time
 Total time in calls with each person, kept forever, plus the details of your recent calls (when, where and who was there).
@@ -96,10 +97,10 @@ Total time in calls with each person, kept forever, plus the details of your rec
 
 | Where | What it does |
 | --- | --- |
-| Lurk button (top bar) | Opens Lurk: typed & quit, VIPs, mentions, strangers, calls and settings |
+| Lurk button (top bar) | Opens Lurk: typed & quit, VIPs, mentions, requests, calls and settings |
 | Clock button (top bar) | VIP history: deleted/edited messages, search, old messages, status changes, people |
 | Direct messages list | How long each VIP has been offline, under their name |
-| Requests button (top bar) | Pending friend requests, spam filter and who removed you, with search |
+| Requests button (top bar) | Pending friend requests, spam filter, who removed you and who gave up |
 | Server sidebar | Avatar of whoever is typing to you right now; click to open the DM |
 | Right-click a user | See their attempts, add or remove them as VIP, see call time, ignore them |
 | Right-click a group or channel | See typing attempts and deleted/edited messages there, or ignore it |
