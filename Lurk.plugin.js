@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.13.1", items: [
+    ["fixed", "Pedidos cancelados: pedidos feitos há mais de 24 horas agora mostram a data junto com o horário.", "Canceled requests: requests sent more than 24 hours ago now show the date along with the time."],
     ["improved", "Quem você tinha tirado da Lista VIP antes da versão 2.13.0 agora aparece em Removidos recentemente, com o prazo começando de novo pra você restaurar antes de o histórico ser apagado.", "People you removed from your VIP list before version 2.13.0 now show up under Recently removed, with a fresh deadline to restore them before their history is deleted."],
   ] },
   { version: "2.13.0", items: [
@@ -4265,7 +4266,9 @@ function ContactsScreen({ initial = "first" }) {
           h("span", { className: "dmtt-row-main" },
             h("span", { className: "dmtt-row-title" }, nameOf(r.userId, r), r.username ? h("span", { className: "dmtt-row-user" }, ` @${r.username}`) : null),
             h("span", { className: "dmtt-row-sub" }, r.canceledAt
-              ? L(`Pediu às ${fmtHM(r.at)} · cancelou após ${fmtDur(r.canceledAt - r.at)}`, `Sent at ${fmtHM(r.at)} · canceled after ${fmtDur(r.canceledAt - r.at)}`)
+              ? (Date.now() - r.at < DAY
+                ? L(`Pediu às ${fmtHM(r.at)} · cancelou após ${fmtDur(r.canceledAt - r.at)}`, `Sent at ${fmtHM(r.at)} · canceled after ${fmtDur(r.canceledAt - r.at)}`)
+                : L(`Pediu em ${fmtDate(r.at).slice(0, 16)} · cancelou após ${fmtDur(r.canceledAt - r.at)}`, `Sent on ${fmtDate(r.at).slice(0, 16)} · canceled after ${fmtDur(r.canceledAt - r.at)}`))
               : L(`Pediu em ${fmtDate(r.at).slice(0, 16)} · sumiu com o plugin desligado`, `Sent on ${fmtDate(r.at).slice(0, 16)} · gone while the plugin was off`))),
           h("span", { className: "dmtt-row-time" }, r.canceledAt ? relTime(r.canceledAt) : ""),
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))) }, h(Icon, { d: ICON_X, size: 12 })))) })
