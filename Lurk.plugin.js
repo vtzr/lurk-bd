@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.15.0", items: [
+    ["improved", "Histórico VIP › Mensagens não mostra mais as mensagens normais do seu privado com o VIP, que você já viu. Do privado aparecem só as editadas e apagadas. Mensagens de servidores e grupos continuam todas lá, e a busca continua achando tudo.", "VIP history › Messages no longer shows regular messages from your DMs with the VIP, which you've already seen. From DMs, only edited and deleted ones show up. Messages from servers and groups are all still there, and search still finds everything."],
     ["new", "Quando um VIP é pego invisível, o \"offline há…\" vira \"visto invisível há…\", contando desde a última atividade dele. Aparece nas mensagens diretas, no topo da conversa, na Lista VIP e no perfil do VIP. Depois de 30 minutos sem atividade, volta pro \"offline há…\" de antes.", "When a VIP is caught invisible, \"offline for…\" becomes \"seen invisible … ago\", counting from their last activity. It shows in your DM list, at the top of the conversation, in the VIP list and on the VIP's page. After 30 minutes with no activity, it goes back to \"offline for…\"."],
     ["improved", "O Lurk agora também percebe que um VIP está invisível quando ele entra em call, reage, edita ou apaga uma mensagem, além de digitar e mandar mensagem.", "Lurk now also notices a VIP is invisible when they join a call, react, edit or delete a message, besides typing and sending messages."],
   ] },
@@ -3461,11 +3462,17 @@ function vipFeedItems() {
   }
   return out.sort((a, b) => activityAt(b) - activityAt(a));
 }
+function isPrivateDM(m) {
+  if (m.guildId) return false;
+  const ch = safe(() => ChannelStore?.getChannel?.(m.channelId));
+  return ch ? ch.type === 1 : !m.channelName;
+}
 function vipAllItems() {
   const seen = new Set();
   const out = [];
   for (const m of loadVip().messages) {
     if (!isVip(m.userId) || seen.has(m.id)) continue;
+    if (!m.deletedAt && !m.edits?.length && isPrivateDM(m)) continue;
     seen.add(m.id); out.push(m);
   }
   return out.sort((a, b) => activityAt(b) - activityAt(a));
