@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.15.0", items: [
+    ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
     ["improved", "Histórico VIP › Mensagens não mostra mais as mensagens normais do seu privado com o VIP, que você já viu. Do privado aparecem só as editadas e apagadas. Mensagens de servidores e grupos continuam todas lá, e a busca continua achando tudo.", "VIP history › Messages no longer shows regular messages from your DMs with the VIP, which you've already seen. From DMs, only edited and deleted ones show up. Messages from servers and groups are all still there, and search still finds everything."],
     ["new", "Quando um VIP é pego invisível, o \"offline há…\" vira \"visto invisível há…\", contando desde a última atividade dele. Aparece nas mensagens diretas, no topo da conversa, na Lista VIP e no perfil do VIP. Depois de 30 minutos sem atividade, volta pro \"offline há…\" de antes.", "When a VIP is caught invisible, \"offline for…\" becomes \"seen invisible … ago\", counting from their last activity. It shows in your DM list, at the top of the conversation, in the VIP list and on the VIP's page. After 30 minutes with no activity, it goes back to \"offline for…\"."],
     ["improved", "O Lurk agora também percebe que um VIP está invisível quando ele entra em call, reage, edita ou apaga uma mensagem, além de digitar e mandar mensagem.", "Lurk now also notices a VIP is invisible when they join a call, react, edit or delete a message, besides typing and sending messages."],
@@ -681,8 +682,8 @@ function Flash({ isNew, children }) {
 }
 const MENTION_TYPES = ["ghost", "reply", "keyword", "reaction"];
 
-const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: false, notifyLong: false, notifyServers: false };
-const vipAlertList = () => [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyServers", L("Entrar ou sair de um servidor em comum", "They join or leave a shared server")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
+const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: false, notifyLong: false, notifyServers: false, notifyReactRemove: false };
+const vipAlertList = () => [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyServers", L("Entrar ou sair de um servidor em comum", "They join or leave a shared server")], ["notifyReactRemove", L("Tirar uma reação", "They remove a reaction")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
 function vipPreset() {
   const p = getSettings().vipPreset || {};
   return Object.fromEntries(vipAlertList().map(([f]) => [f, typeof p[f] === "boolean" ? p[f] : VIP_DEFAULT[f]]));
@@ -750,6 +751,7 @@ function purgeVipData(uid) {
   safe(() => { const f = getFreq(); const x = getFreqX(); delete f[uid]; delete x.dev[uid]; freqDirty = true; flushFreq(); });
   safe(() => { const log = getProfileLog(); const keep = log.filter((e) => e.userId !== uid); if (keep.length !== log.length) { Data.save(k("vipProfileLog"), keep); profileBus.emit(); } });
   safe(() => { if (getProfileWatch() === uid) setProfileWatch(null); });
+  safe(() => { const rl = getVipReactions(); const keep = rl.filter((x) => x.userId !== uid); if (keep.length !== rl.length) { reactCache = keep; Data.save(k("vipReactions"), keep); reactBus.emit(); } });
   const r = getRemovedVips();
   if (r[uid]) { delete r[uid]; Data.save(k("vipRemoved"), r); }
   vipBus.emit();
@@ -1987,10 +1989,55 @@ function pushMentionEvent(ev) {
 }
 
 const emojiKey = (e) => e?.id || e?.name || "?";
+const REACT_MAX = 2000;
+const reactBus = createBus();
+let reactCache = null;
+let reactTimer = null;
+const getVipReactions = () => (reactCache ??= Data.load(k("vipReactions")) || []);
+function saveReactionsSoon() { reactBus.emit(); vipBus.emit(); if (reactTimer) return; reactTimer = setTimeout(() => { reactTimer = null; Data.save(k("vipReactions"), getVipReactions().slice(0, REACT_MAX)); }, 1500); }
+function recordVipReaction(a) {
+  const s = getSettings();
+  if (!s.vipRecordMessages || !isVip(a.userId) || isIgnoredPlace(a.channelId, a.guildId)) return;
+  const gid = a.guildId || safe(() => ChannelStore?.getChannel?.(a.channelId)?.guild_id) || null;
+  if (!gid && !s.vipRecordDMs) return;
+  const list = getVipReactions();
+  const ek = emojiKey(a.emoji);
+  if (list.some((r) => r.messageId === a.messageId && r.userId === a.userId && r.emojiKey === ek && !r.removedAt)) return;
+  const msg = safe(() => MessageStore?.getMessage?.(a.channelId, a.messageId));
+  const author = msg?.author;
+  list.unshift({
+    kind: "reaction", id: `r:${a.messageId}:${a.userId}:${ek}:${Date.now()}`, userId: a.userId, messageId: a.messageId, emojiKey: ek,
+    emoji: a.emoji ? { id: a.emoji.id || null, name: a.emoji.name || null, animated: !!a.emoji.animated } : null,
+    ...placeOf(gid, a.channelId), at: Date.now(), removedAt: null,
+    targetId: author?.id || null, targetName: author ? (author.id === myId() ? null : author.globalName || author.global_name || author.username || null) : null,
+    snippet: msg ? String(msg.content || "").slice(0, 160) || (msg.attachments?.length ? L("[anexo]", "[attachment]") : "") : null,
+  });
+  if (list.length > REACT_MAX + 100) list.length = REACT_MAX;
+  saveReactionsSoon();
+}
+function recordVipReactionRemove(a) {
+  if (!isVip(a.userId)) return;
+  const ek = emojiKey(a.emoji);
+  const r = getVipReactions().find((x) => x.messageId === a.messageId && x.userId === a.userId && x.emojiKey === ek && !x.removedAt);
+  if (!r) return;
+  r.removedAt = Date.now();
+  saveReactionsSoon();
+  safe(() => updateSnipeBadge());
+  if (!vipFlag(a.userId, "notifyReactRemove")) return;
+  const st = getSettings();
+  const em = r.emoji?.id ? `:${r.emoji.name}:` : r.emoji?.name || "";
+  notify({
+    title: L("Lista VIP", "VIP list"),
+    text: L(`${nameOf(a.userId)} reagiu ${em} e tirou depois de ${fmtDur(r.removedAt - r.at)} em ${placeLabel(r)}`, `${nameOf(a.userId)} reacted ${em} and removed it after ${fmtDur(r.removedAt - r.at)} in ${placeLabel(r)}`),
+    icon: avatarOf(UserStore?.getUser?.(a.userId), a.userId), onClick: () => jumpTo(r.guildId, r.channelId, r.messageId),
+    toast: st.vipToast, desktop: st.vipDesktop, sound: st.vipSound,
+  });
+}
 function onReactionAdd(a) {
   try {
     if (!a?.userId || a.userId === myId() || isIgnoredPlace(a.channelId, a.guildId)) return;
-    if (isVip(a.userId)) safe(() => checkInvisible(a.userId, "reaction", a.guildId ? (() => { const n = ChannelStore?.getChannel?.(a.channelId)?.name; return n ? `#${n}` : null; })() : null));
+    if (isVip(a.userId)) safe(() => recordVipReaction(a));
+    if (isVip(a.userId)) safe(() => checkInvisible(a.userId, "reaction", (a.guildId || ChannelStore?.getChannel?.(a.channelId)?.guild_id) ? (() => { const n = ChannelStore?.getChannel?.(a.channelId)?.name; return n ? `#${n}` : null; })() : null));
     if (!getSettings().mentionReaction) return;
     const msg = safe(() => MessageStore?.getMessage?.(a.channelId, a.messageId));
     const author = a.messageAuthorId || msg?.author?.id;
@@ -2004,6 +2051,7 @@ function onReactionAdd(a) {
 }
 function onReactionRemove(a) {
   try {
+    if (a?.userId && !isIgnoredPlace(a.channelId, a.guildId)) safe(() => recordVipReactionRemove(a));
     const key = `${a?.messageId}:${a?.userId}:${emojiKey(a?.emoji)}`;
     const c = reactionCache.get(key);
     if (!c) return;
@@ -2346,6 +2394,7 @@ function markSeen2(id, online) {
 function initSeen() {
   seenCache = null;
   invisCache = null;
+  reactCache = null;
   const all = getSeen();
   const events = loadVip().events;
   for (const id of Object.keys(getVipList())) {
@@ -3451,11 +3500,11 @@ function callTotals() {
 }
 
 const snipeBus = vipBus;
-const activityAt = (m) => Math.max(lastChangeAtSafe(m), m.createdAt || 0);
+const activityAt = (m) => (m.kind === "reaction" ? m.removedAt || m.at : Math.max(lastChangeAtSafe(m), m.createdAt || 0));
 function lastChangeAtSafe(m) { return Math.max(m.deletedAt || 0, m.edits?.length ? m.edits[m.edits.length - 1].at : 0); }
 function vipFeedItems() {
   const seen = new Set();
-  const out = [];
+  const out = getVipReactions().filter((r) => r.removedAt && isVip(r.userId));
   for (const m of loadVip().messages) {
     if (!isVip(m.userId) || seen.has(m.id)) continue;
     if (m.deletedAt || m.edits?.length || m.watched) { seen.add(m.id); out.push(m); }
@@ -3470,6 +3519,7 @@ function isPrivateDM(m) {
 function vipAllItems() {
   const seen = new Set();
   const out = [];
+  for (const r of getVipReactions()) if (isVip(r.userId)) out.push(r);
   for (const m of loadVip().messages) {
     if (!isVip(m.userId) || seen.has(m.id)) continue;
     if (!m.deletedAt && !m.edits?.length && isPrivateDM(m)) continue;
@@ -3477,7 +3527,7 @@ function vipAllItems() {
   }
   return out.sort((a, b) => activityAt(b) - activityAt(a));
 }
-const isFeedItem = (m) => !!(m.deletedAt || m.edits?.length || m.watched);
+const isFeedItem = (m) => (m.kind === "reaction" ? !!m.removedAt : !!(m.deletedAt || m.edits?.length || m.watched));
 const unseenTyping = (seen) => new Set(getHistory().filter((r) => r.lastTypingAt > seen).map((r) => r.userId)).size;
 const unseenMention = (type, seen) => (mentionData.owner ? mentionData.events : loadMentions().events).filter((e) => e.type === type && e.at > seen).length;
 const unseenMentionsAll = (get) => MENTION_TYPES.reduce((n, t) => n + unseenMention(t, get(`mention:${t}`)), 0);
@@ -4222,9 +4272,10 @@ function PersonScreen({ userId, channelId }) {
 }
 
 function EmojiView({ e }) {
+  const [failed, setFailed] = React.useState(false);
   if (!e) return null;
-  if (e.id) return h("img", { className: "dmtt-emoji", src: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? "gif" : "webp"}?size=32`, alt: e.name || "", title: `:${e.name}:` });
-  return h("span", { className: "dmtt-emoji-txt" }, e.name);
+  if (e.id && !failed) return h("img", { className: "dmtt-emoji", src: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? "gif" : "webp"}?size=48`, alt: "", title: `:${e.name}:`, onError: () => setFailed(true) });
+  return h("span", { className: "dmtt-emoji-txt" }, e.id ? `:${e.name || "?"}:` : e.name);
 }
 const MENTION_LABEL = labelMap(
   { ghost: "Ghost pings", reply: "Respostas apagadas", keyword: "Palavras-chave", reaction: "Reações removidas" },
@@ -4899,6 +4950,8 @@ function MessagesFeed({ channelId }) {
   const nDel = list.filter((m) => m.deletedAt).length;
   const nEd = list.filter((m) => m.edits?.length).length;
   const nSent = list.filter((m) => m.watched).length;
+  const nReact = list.filter((m) => m.kind === "reaction").length;
+  if (kind === "reactions") list = list.filter((m) => m.kind === "reaction");
   if (kind === "deleted") list = list.filter((m) => m.deletedAt);
   if (kind === "edited") list = list.filter((m) => m.edits?.length);
   if (kind === "sent") list = list.filter((m) => m.watched);
@@ -4906,10 +4959,27 @@ function MessagesFeed({ channelId }) {
     searchBar,
     h(Group, null, h(NavRow, { icon: "archive", color: "#8e8e93", title: L("Mensagens antigas", "Old messages"), detail: archives.length ? `${archives.length}` : L("Nenhuma", "None"), onClick: () => nav.push({ type: "archives" }) })),
     here.length ? h(Chips, { label: L("Onde", "Where"), value: where, onChange: setWhere, options: [["here", hereLabel, here.length], ["all", L("Todos os lugares", "Everywhere"), all.length]] }) : null,
-    h(Chips, { label: L("Filtrar", "Filter"), value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd], ...(nSent ? [["sent", L("Enviadas", "Sent"), nSent]] : [])] }),
-    list.length ? h(DayList, { items: list.slice(0, limit), getTime: activityAt, render: (m) => h(Flash, { key: m.id, isNew: isFeedItem(m) && activityAt(m) > seenBefore }, h(ChangeCard, { m, isNew: false, showPlace: where === "all" })) })
+    h(Chips, { label: L("Filtrar", "Filter"), value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd], ["reactions", L("Reações", "Reactions"), nReact], ...(nSent ? [["sent", L("Enviadas", "Sent"), nSent]] : [])] }),
+    list.length ? h(DayList, { items: list.slice(0, limit), getTime: activityAt, render: (m) => h(Flash, { key: m.id, isNew: isFeedItem(m) && activityAt(m) > seenBefore }, m.kind === "reaction" ? h(ReactionCard, { r: m, showPlace: where === "all" }) : h(ChangeCard, { m, isNew: false, showPlace: where === "all" })) })
       : h(Empty, { icon: "clock", title: L("Nada por aqui", "Nothing here") }, kind === "all" ? L("Quando um VIP mandar, editar ou apagar uma mensagem, aparece aqui.", "When a VIP sends, edits or deletes a message, it shows up here.") : L("Quando um VIP apagar ou editar uma mensagem, aparece aqui.", "When a VIP deletes or edits a message, it shows up here.")),
     list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 40) }, L("Mostrar mais", "Show more")) : null);
+}
+function ReactionCard({ r, showPlace }) {
+  const nav = useNav();
+  const removed = !!r.removedAt;
+  const target = r.targetId === myId() ? L("na sua mensagem", "on your message") : r.targetName ? L(`na mensagem de ${r.targetName}`, `on ${r.targetName}'s message`) : L("numa mensagem", "on a message");
+  return h(MessageCard, {
+    avatar: h("button", { className: "dmtt-avbtn", title: L("Ver perfil VIP", "Open VIP profile"), onClick: () => nav.push({ type: "vipPerson", userId: r.userId }) }, h(Avatar, { userId: r.userId, size: 32 })),
+    name: nameOf(r.userId, getVipList()[r.userId] || {}),
+    action: removed ? L("reagiu e tirou", "reacted, then removed it") : L("reagiu", "reacted"),
+    meta: h(React.Fragment, null,
+      showPlace ? h("span", { className: "dmtt-meta-line" }, placeLabel(r)) : null,
+      removed ? h("span", { className: "dmtt-meta-line" }, joinNodes([L(`reagiu ${fmtDM(r.at)}`, `reacted ${fmtDM(r.at)}`), L(`tirou ${fmtDM(r.removedAt)}`, `removed ${fmtDM(r.removedAt)}`), L(`ficou ${fmtDur(r.removedAt - r.at)}`, `stayed ${fmtDur(r.removedAt - r.at)}`)].map((t, i) => h("span", { key: i, className: "dmtt-nowrap" }, t)))) : null),
+    time: fmtHM(r.removedAt || r.at),
+    body: h("span", { className: `dmtt-react-big${removed ? " is-removed" : ""}` }, h(EmojiView, { e: r.emoji })),
+    extra: h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, `${target[0].toUpperCase()}${target.slice(1)}`)), r.snippet ? h("div", null, r.snippet) : null),
+    onJump: () => jumpTo(r.guildId, r.channelId, r.messageId),
+  });
 }
 function ChangeCard({ m, isNew, showPlace }) {
   const [open, setOpen] = React.useState(false);
@@ -6308,6 +6378,9 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-files a { color: var(--c-link); }
 .dmtt-kw { color: var(--c-strong); background: rgba(255,159,10,.22); padding: 0 5px; border-radius: 5px; font-weight: 600; }
 .dmtt-emoji { width: 16px; height: 16px; vertical-align: -3px; }
+.dmtt-react-big { display: inline-flex; align-items: center; font-size: 26px; line-height: 1; }
+.dmtt-react-big .dmtt-emoji { width: 30px; height: 30px; }
+.dmtt-react-big.is-removed { opacity: .55; }
 
 .dmtt-sub { display: flex; flex-direction: column; gap: 4px; padding: 0 14px 12px 40px; }
 .dmtt-subrow { display: flex; gap: 10px; font-size: 12.5px; }
