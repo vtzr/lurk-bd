@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vtzr
- * @version 2.13.1
+ * @version 2.14.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vtzr/lurk-bd
  * @source https://github.com/vtzr/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.13.1";
+const VERSION = "2.14.0";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,8 +52,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
-  { version: "2.13.1", items: [
+  { version: "2.14.0", items: [
     ["improved", "\"Desconhecidos\" agora se chama \"Desistiram\" e fica dentro de Solicitações, junto com os pedidos de amizade. As duas coisas ligam e desligam juntas em Ajustes › Solicitações, e a tela inicial mostra só Solicitações.", "\"Strangers\" is now called \"Gave up\" and lives inside Requests, next to friend requests. Both turn on and off together in Settings › Requests, and the home screen shows just Requests."],
+    ["new", "Desistiram: quem desiste mais de uma vez ganha uma etiqueta como \"2ª vez\", e tocar nela mostra as vezes anteriores.", "Gave up: people who give up more than once get a tag like \"2nd time\", and tapping it shows the earlier times."],
     ["improved", "Pedidos cancelados: tocar no card abre o perfil da pessoa.", "Canceled requests: tapping a card opens the person's profile."],
     ["improved", "O contador do botão de Solicitações agora inclui as novidades de Desistiram.", "The Requests button counter now includes what's new in Gave up."],
     ["fixed", "Pedidos cancelados: o card ficou mais claro, com quando a pessoa pediu e depois de quanto tempo cancelou em linhas separadas. Pedidos feitos há mais de 24 horas mostram a data junto com o horário.", "Canceled requests: the card is clearer, with when they sent it and how long until they canceled on separate lines. Requests sent more than 24 hours ago show the date along with the time."],
@@ -4238,6 +4239,30 @@ function MentionsScreen({ initial = "all" }) {
     list.length ? h(Group, null, h(NavRow, { title: seg === "all" ? L("Apagar todas as menções", "Delete all mentions") : L(`Apagar "${MENTION_LABEL[seg]}"`, `Delete "${MENTION_LABEL[seg]}"`), danger: true, onClick: () => confirmDanger(L("Apagar", "Delete"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => deleteMentionEvents((e) => seg === "all" || e.type === seg)) })) : null);
 }
 
+function gaveUpHistory(userId) {
+  return [
+    ...getFirstContacts().filter((e) => e.userId === userId).map((e) => ({ at: e.at, kind: "typed" })),
+    ...getCanceledReqs().filter((r) => r.userId === userId).map((r) => ({ at: r.canceledAt || r.at, kind: "canceled" })),
+  ].sort((a, b) => a.at - b.at);
+}
+const ordinalPT = (n) => `${n}ª`;
+const ordinalEN = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
+function GaveUpRepeat({ userId, at }) {
+  const [open, setOpen] = React.useState(false);
+  const all = gaveUpHistory(userId);
+  if (all.length < 2) return null;
+  const idx = all.findIndex((x) => x.at === at);
+  const n = idx >= 0 ? idx + 1 : all.length;
+  const others = all.filter((x) => x.at !== at).reverse();
+  const when = (t) => (Date.now() - t < DAY ? L(`hoje, ${fmtHM(t)}`, `today, ${fmtHM(t)}`) : `${fmtDate(t).slice(0, 10)}, ${fmtHM(t)}`);
+  return h(React.Fragment, null,
+    h("span", { className: "dmtt-gu-line" },
+      h("button", { className: "dmtt-tag is-orange is-btn", "aria-expanded": open, onClick: (ev) => { ev.stopPropagation(); setOpen(!open); } },
+        L(`${ordinalPT(n)} vez`, `${ordinalEN(n)} time`), " ", h("span", { className: `dmtt-gu-chev${open ? " is-open" : ""}`, "aria-hidden": "true" }, "›"))),
+    open ? h("span", { className: "dmtt-gu-list" }, others.map((x, i) => h("span", { key: i, className: "dmtt-gu-item" },
+      h("span", { className: "dmtt-gu-when" }, when(x.at)),
+      h("span", null, x.kind === "typed" ? L("Digitou e não mandou", "Typed and didn't send") : L("Pediu e cancelou", "Sent a request and canceled"))))) : null);
+}
 function ContactsScreen({ initial = "first" }) {
   useBus(reqBus);
   const [seg, setSeg] = useNavState("seg", initial);
@@ -4261,7 +4286,8 @@ function ContactsScreen({ initial = "first" }) {
             h("span", { className: "dmtt-row-sub" }, joinNodes([
               e.stoppedAt ? L(`Digitou ${fmtRangeShort(attemptRange({ startedAt: e.at, lastTypingAt: e.stoppedAt, signals: e.stoppedAt > e.at ? 2 : 1 }))} e não enviou`, `Typed ${fmtRangeShort(attemptRange({ startedAt: e.at, lastTypingAt: e.stoppedAt, signals: e.stoppedAt > e.at ? 2 : 1 }))} and didn't send`) : L("Digitou e não enviou", "Typed and didn't send"),
               e.isFriend === false ? L("não é amigo", "not a friend") : null,
-              e.isRequest ? L("solicitação de mensagem", "message request") : null]))),
+              e.isRequest ? L("solicitação de mensagem", "message request") : null])),
+            h(GaveUpRepeat, { userId: e.userId, at: e.at })),
           h("span", { className: "dmtt-row-time" }, fmtHM(e.at)),
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveFirstContacts(getFirstContacts().filter((x) => !(x.userId === e.userId && x.at === e.at))) }, h(Icon, { d: ICON_X, size: 12 })),
           h("button", { className: "dmtt-link", onClick: () => openDM(e.channelId, e.userId, false) }, L("Abrir", "Open")))) })
@@ -4271,7 +4297,8 @@ function ContactsScreen({ initial = "first" }) {
           h("span", { className: "dmtt-row-main" },
             h("span", { className: "dmtt-row-title" }, nameOf(r.userId, r), r.username ? h("span", { className: "dmtt-row-user" }, ` @${r.username}`) : null),
             h("span", { className: "dmtt-row-sub" }, Date.now() - r.at < DAY ? L(`Pediu às ${fmtHM(r.at)}`, `Sent at ${fmtHM(r.at)}`) : L(`Pediu em ${fmtDate(r.at).slice(0, 10)}, ${fmtHM(r.at)}`, `Sent on ${fmtDate(r.at).slice(0, 10)}, ${fmtHM(r.at)}`)),
-            h("span", { className: "dmtt-row-sub" }, r.canceledAt ? L(`Cancelou após ${fmtDur(r.canceledAt - r.at)}`, `Canceled after ${fmtDur(r.canceledAt - r.at)}`) : L("Sumiu enquanto o plugin estava desligado", "Gone while the plugin was off"))),
+            h("span", { className: "dmtt-row-sub" }, r.canceledAt ? L(`Cancelou após ${fmtDur(r.canceledAt - r.at)}`, `Canceled after ${fmtDur(r.canceledAt - r.at)}`) : L("Sumiu enquanto o plugin estava desligado", "Gone while the plugin was off")),
+            h(GaveUpRepeat, { userId: r.userId, at: r.canceledAt || r.at })),
           h("span", { className: "dmtt-row-time" }, r.canceledAt ? relTime(r.canceledAt) : ""),
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: (ev) => { ev.stopPropagation(); saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))); } }, h(Icon, { d: ICON_X, size: 12 })))) })
         : h(Empty, { icon: "userPlus", title: L("Nenhum pedido cancelado", "No canceled requests") }, pendingText)),
@@ -6169,6 +6196,12 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-tag.is-btn { cursor: pointer; }
 .dmtt-row-tap { cursor: pointer; }
 .dmtt-row-tap:hover { background: var(--c-hover); }
+.dmtt-gu-line { display: flex; margin-top: 5px; }
+.dmtt-gu-chev { display: inline-block; transition: transform .15s ease; }
+.dmtt-gu-chev.is-open { transform: rotate(90deg); }
+.dmtt-gu-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--c-sep); }
+.dmtt-gu-item { display: flex; flex-direction: column; font-size: 12.5px; color: var(--c-text); }
+.dmtt-gu-when { font-size: 11.5px; color: var(--c-muted); font-variant-numeric: tabular-nums; }
 
 .dmtt-hero { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 16px 0 4px; text-align: center; }
 .dmtt-hero-name { margin-top: 8px; font-size: 21px; font-weight: 700; color: var(--c-strong); }
