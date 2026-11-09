@@ -5253,6 +5253,16 @@ function liveFlagsOf(userId) {
 }
 const withN = (n) => L(`com ${n}`, `with ${n}`);
 const alone = () => L("sozinho", "alone");
+function ProfileButton({ pid }) {
+  const ref = React.useRef(null);
+  const label = L(`Abrir o perfil de ${nameOf(pid)}`, `Open ${nameOf(pid)}'s profile`);
+  React.useEffect(() => {
+    let tip = null;
+    try { if (ref.current) tip = UI.createTooltip(ref.current, label, { side: "top" }); } catch {}
+    return () => { try { tip?.hide?.(); } catch {} };
+  }, [label]);
+  return h("button", { ref, className: "dmtt-vpeer-btn", "aria-label": label, onClick: (ev) => { ev.stopPropagation(); openProfile(pid); } }, h(SIcon, { d: SI.person, size: 14 }));
+}
 function mergeSplitCalls(force) {
   if (!force && Data.load(k("voiceMerged1"))) return;
   const d = loadVip();
@@ -5290,7 +5300,7 @@ function VoiceDetail({ v, live, vipId }) {
     ...(v.events || []).map((e) => ({ at: e.at, flag: e.flag, on: e.on, text: FLAG_EVENT(e.flag, e.on) })),
     ...(!live ? [{ at: v.leftAt, text: v.cut ? L("Fim do registro (Discord fechado)", "Recording ended (Discord closed)") : L("Saiu da call", "Left the call") }] : []),
   ].sort((a, b) => a.at - b.at);
-  const profileBtn = (pid) => h("button", { className: "dmtt-vpeer-btn", title: L("Ver perfil", "View profile"), "aria-label": L(`Ver perfil de ${nameOf(pid)}`, `View ${nameOf(pid)}'s profile`), onClick: (ev) => { ev.stopPropagation(); openProfile(pid); } }, h(SIcon, { d: SI.person, size: 14 }));
+  const profileBtn = (pid) => h(ProfileButton, { pid });
   const vipUser = vipId ? UserStore?.getUser?.(vipId) : null;
   const vipFlags = live ? (liveFlagsOf(vipId) || v.now || {}) : v;
   const inNow = live ? usersInChannel(v.channelId).length : 0;
