@@ -59,7 +59,7 @@ const CHANGELOG = [
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
     ["improved", "Histórico VIP › Mensagens não mostra mais as mensagens normais do seu privado com o VIP, que você já viu. Do privado aparecem só as editadas e apagadas. Mensagens de servidores e grupos continuam todas lá, e a busca continua achando tudo.", "VIP history › Messages no longer shows regular messages from your DMs with the VIP, which you've already seen. From DMs, only edited and deleted ones show up. Messages from servers and groups are all still there, and search still finds everything."],
     ["new", "Quando um VIP é pego invisível, o \"offline há…\" vira \"visto invisível há…\", contando desde a última atividade dele. Aparece nas mensagens diretas, no topo da conversa, na Lista VIP e no perfil do VIP. Fica assim até a pessoa aparecer online, ausente ou não perturbe de novo.", "When a VIP is caught invisible, \"offline for…\" becomes \"seen invisible … ago\", counting from their last activity. It shows in your DM list, at the top of the conversation, in the VIP list and on the VIP's page. It stays that way until they show up as online, idle or do not disturb again."],
-    ["improved", "O Lurk agora também percebe que um VIP está invisível quando ele entra ou está em call, reage, edita ou apaga uma mensagem, além de digitar e mandar mensagem.", "Lurk now also notices a VIP is invisible when they join or are in a call, react, edit or delete a message, besides typing and sending messages."],
+    ["improved", "O Lurk agora também percebe que um VIP está invisível quando ele entra ou está em call, reage, edita ou apaga uma mensagem, além de digitar e mandar mensagem. Vale também pra VIPs que não são seus amigos.", "Lurk now also notices a VIP is invisible when they join or are in a call, react, edit or delete a message, besides typing and sending messages. It works for VIPs who aren't your friends too."],
   ] },
   { version: "2.14.0", items: [
     ["improved", "\"Desconhecidos\" agora se chama \"Desistiram\" e fica dentro de Solicitações, junto com os pedidos de amizade. As duas coisas ligam e desligam juntas em Ajustes › Solicitações, e a tela inicial mostra só Solicitações.", "\"Strangers\" is now called \"Gave up\" and lives inside Requests, next to friend requests. Both turn on and off together in Settings › Requests, and the home screen shows just Requests."],
@@ -1672,7 +1672,7 @@ function saveInvisSoon() { if (invisTimer) return; invisTimer = setTimeout(() =>
 function clearInvisible(uid) { const a = getInvisAct(); if (a[uid]) { delete a[uid]; saveInvisSoon(); } }
 function invisibleAt(uid) {
   if (!isVip(uid) || rawPresence(uid)?.status !== "offline") return null;
-  if (vipVoice.has(uid) && isFriendOf(uid)) return Date.now();
+  if (vipVoice.has(uid)) return Date.now();
   return getInvisAct()[uid] || null;
 }
 const INVIS_VIA = {
@@ -1689,7 +1689,7 @@ function invisViaText(e, cap) {
   return (cap ? up : low) + where;
 }
 function checkInvisible(userId, via, where) {
-  if (!isVip(userId) || !isFriendOf(userId)) return;
+  if (!isVip(userId)) return;
   const p = rawPresence(userId);
   if (!p || p.status !== "offline") return;
   getInvisAct()[userId] = Date.now();
