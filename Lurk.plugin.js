@@ -1464,10 +1464,12 @@ function dayLabel(ms) {
 }
 function groupByDay(items, getTime) {
   const days = [];
+  const byLabel = new Map();
   for (const it of items) {
     const label = dayLabel(getTime(it));
-    if (!days.length || days[days.length - 1].label !== label) days.push({ label, items: [] });
-    days[days.length - 1].items.push(it);
+    let d = byLabel.get(label);
+    if (!d) { d = { label, items: [] }; byLabel.set(label, d); days.push(d); }
+    d.items.push(it);
   }
   return days;
 }
