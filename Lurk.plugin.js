@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.15.0", items: [
+    ["new", "Calls dos VIPs: a pessoa monitorada agora aparece no topo da lista de quem está na call, com foto, nome e se está mutada, sem áudio, transmitindo a tela ou com câmera. Cada pessoa tem um botão pra abrir o perfil, e quando o canal tem limite de pessoas aparece quantos lugares estão ocupados.", "VIP calls: the person you're watching now shows at the top of who's in the call, with their photo, name and whether they're muted, deafened, sharing their screen or on camera. Everyone has a button to open their profile, and when the channel has a user limit it shows how many spots are taken."],
     ["fixed", "Calls de VIPs que já estavam numa call quando o Discord abriu, ou que não são seus amigos, agora aparecem certinho. O Lurk confere a cada 15 segundos.", "Calls of VIPs who were already in a call when Discord opened, or who aren't your friends, now show up correctly. Lurk checks every 15 seconds."],
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
     ["improved", "Histórico VIP › Mensagens não mostra mais as mensagens normais do seu privado com o VIP, que você já viu. Do privado aparecem só as editadas e apagadas. Mensagens de servidores e grupos continuam todas lá, e a busca continua achando tudo.", "VIP history › Messages no longer shows regular messages from your DMs with the VIP, which you've already seen. From DMs, only edited and deleted ones show up. Messages from servers and groups are all still there, and search still finds everything."],
@@ -2081,6 +2082,7 @@ function openVoice(userId, vs, already) {
     peerLog: Object.fromEntries(present.map((id) => [id, { joinedAt: now, leftAt: null, already: true }])),
     events: [],
     muted: false, deafened: false, streamed: false, video: false,
+    limit: Number(safe(() => ChannelStore?.getChannel?.(vs.channelId)?.userLimit)) || 0,
   };
   applyVoiceFlags(sess, vs);
   sess.events = [];
@@ -3780,6 +3782,7 @@ const SI = {
   notes: "M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM14 3v5h5M8.5 12h7M8.5 15.5h7M8.5 8.5h3",
   routine: "M8 2v3M16 2v3M4 5h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 10h18M7 14h2M11 14h2M15 14h2M7 17.5h2M11 17.5h2",
   hash: "M5 9h14M4 15h14M10 3 8 21M16 3l-2 18",
+  person: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
   sparkle: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
 };
 const LURK_ICON = () => SI[getSettings().lurkIcon] || SI.ghost;
@@ -5227,8 +5230,23 @@ function VoiceDetail({ v, live, vipId }) {
     ...(v.events || []).map((e) => ({ at: e.at, flag: e.flag, on: e.on, text: FLAG_EVENT(e.flag, e.on) })),
     ...(!live ? [{ at: v.leftAt, text: v.cut ? L("Fim do registro (Discord fechado)", "Recording ended (Discord closed)") : L("Saiu da call", "Left the call") }] : []),
   ].sort((a, b) => a.at - b.at);
+  const profileBtn = (pid) => h("button", { className: "dmtt-vpeer-btn", title: L("Ver perfil", "View profile"), "aria-label": L(`Ver perfil de ${nameOf(pid)}`, `View ${nameOf(pid)}'s profile`), onClick: (ev) => { ev.stopPropagation(); openProfile(pid); } }, h(SIcon, { d: SI.person, size: 14 }));
+  const vipUser = vipId ? UserStore?.getUser?.(vipId) : null;
+  const vipFlags = live ? (liveFlagsOf(vipId) || v.now || {}) : v;
+  const inNow = live ? usersInChannel(v.channelId).length : 0;
+  const limit = Number(live ? safe(() => ChannelStore?.getChannel?.(v.channelId)?.userLimit) || v.limit : v.limit) || 0;
+  const total = peers.length + (vipId ? 1 : 0);
   return h("div", { className: "dmtt-sub dmtt-vdetail" },
-    h("div", { className: "dmtt-mini-h" }, L(`Quem estava · ${peers.length}`, `Who was there · ${peers.length}`)),
+    h("div", { className: "dmtt-mini-h" }, live ? L(`Na call · ${inNow || total}`, `In the call · ${inNow || total}`) : L(`Quem estava · ${total}`, `Who was there · ${total}`)),
+    limit ? h("div", { className: "dmtt-muted dmtt-small dmtt-vlimit" }, live ? L(`${inNow || total} de ${limit} lugares ocupados`, `${inNow || total} of ${limit} spots taken`) : L(`Limite da call: ${limit} ${plural(limit, "pessoa", "pessoas")}`, `Call limit: ${limit} ${plural(limit, "person", "people")}`)) : null,
+    vipId ? h("div", { className: "dmtt-vpeer is-self" },
+      h(Avatar, { userId: vipId, size: 26 }),
+      h("span", { className: "dmtt-row-main" },
+        h("span", { className: "dmtt-row-title dmtt-small" }, nameOf(vipId, getVipList()[vipId] || {}), vipUser?.username ? h("span", { className: "dmtt-row-user" }, ` @${vipUser.username}`) : null),
+        h("span", { className: "dmtt-row-sub" }, joinNodes([v.already ? L("já estava", "already there") : L(`entrou ${fmtHM(v.joinedAt)}`, `joined ${fmtHM(v.joinedAt)}`), live ? L("na call", "in the call") : L(`saiu ${fmtHM(v.leftAt)}`, `left ${fmtHM(v.leftAt)}`)]))),
+      h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => vipFlags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))),
+      h("span", { className: "dmtt-tag is-orange" }, L("Monitorando", "Watching")),
+      profileBtn(vipId)) : null,
     peers.length ? peers.map((p) => {
       const flags = live && !p.leftAt ? liveFlagsOf(p.id) : null;
       const range = p.joinedAt ? joinNodes([
@@ -5240,8 +5258,9 @@ function VoiceDetail({ v, live, vipId }) {
           h("span", { className: "dmtt-row-title dmtt-small" }, p.name || nameOf(p.id), p.username ? h("span", { className: "dmtt-row-user" }, ` @${p.username}`) : null),
           range ? h("span", { className: "dmtt-row-sub" }, range) : null),
         flags ? h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => flags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))) : null,
-        isVip(p.id) ? h("span", { className: "dmtt-tag" }, "VIP") : null);
-    }) : h("div", { className: "dmtt-muted dmtt-small" }, L("Ficou sozinho na call.", "Was alone in the call.")),
+        isVip(p.id) ? h("span", { className: "dmtt-tag" }, "VIP") : null,
+        profileBtn(p.id));
+    }) : h("div", { className: "dmtt-muted dmtt-small" }, live ? L("Está sozinho na call.", "Alone in the call.") : L("Ficou sozinho na call.", "Was alone in the call.")),
     h("div", { className: "dmtt-mini-h" }, L("Linha do tempo", "Timeline")),
     timeline.map((t, i) => h("div", { key: i, className: "dmtt-vt" },
       h("span", { className: "dmtt-num dmtt-muted" }, fmtTime(t.at)),
@@ -6411,6 +6430,10 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-mini-h { margin-top: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--c-muted); }
 .dmtt-vpeer { display: flex; align-items: center; gap: 10px; }
 .dmtt-vpeer.is-gone { opacity: .5; }
+.dmtt-vpeer.is-self { margin: 0 -8px; padding: 6px 8px; border-radius: 10px; background: color-mix(in srgb, #ff9f0a 8%, transparent); }
+.dmtt-vpeer-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: var(--c-fill2); color: var(--c-link); cursor: pointer; transition: background-color .15s ease; }
+.dmtt-vpeer-btn:hover { background: var(--c-hover); }
+.dmtt-vlimit { margin: -4px 0 4px; }
 .dmtt-vt { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .dmtt-vt > .dmtt-num { width: 56px; flex: none; }
 .dmtt-vt-dot { width: 13px; display: inline-flex; justify-content: center; flex: none; }
