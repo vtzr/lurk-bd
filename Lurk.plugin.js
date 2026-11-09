@@ -55,6 +55,7 @@ const CHANGELOG = [
   { version: "2.15.0", items: [
     ["new", "Calls dos VIPs: a pessoa monitorada agora aparece no topo da lista de quem está na call, com foto, nome e se está mutada, sem áudio, transmitindo a tela ou com câmera. Cada pessoa tem um botão pra abrir o perfil, e quando o canal tem limite de pessoas aparece quantos lugares estão ocupados.", "VIP calls: the person you're watching now shows at the top of who's in the call, with their photo, name and whether they're muted, deafened, sharing their screen or on camera. Everyone has a button to open their profile, and when the channel has a user limit it shows how many spots are taken."],
     ["new", "Calls dos VIPs: cada pessoa da call mostra em quantas calls já esteve junto com o VIP e se também estava na última call dele.", "VIP calls: everyone in the call shows how many calls they've shared with the VIP and whether they were also in the VIP's last call."],
+    ["fixed", "Quando o Lurk recarrega (numa atualização, por exemplo) com um VIP em call, ela continua sendo a mesma call em vez de contar como uma nova. As calls que já tinham sido divididas assim são juntadas de novo.", "When Lurk reloads (on an update, for example) while a VIP is in a call, it stays the same call instead of counting as a new one. Calls that were already split this way are merged back."],
     ["improved", "Na lista de quem está na call, a pessoa monitorada e os outros VIPs agora são marcados com uma estrela no lugar de texto.", "In the list of who's in a call, the person you're watching and other VIPs are now marked with a star instead of text."],
     ["fixed", "Calls de VIPs que já estavam numa call quando o Discord abriu, ou que não são seus amigos, agora aparecem certinho. O Lurk confere a cada 15 segundos.", "Calls of VIPs who were already in a call when Discord opened, or who aren't your friends, now show up correctly. Lurk checks every 15 seconds."],
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
@@ -2075,7 +2076,35 @@ function usersInChannel(channelId) {
   const vals = st instanceof Map ? [...st.values()] : Object.values(st);
   return vals.map((v) => v?.userId).filter(Boolean);
 }
+const RESUME_GAP = 10 * 60000;
+function resumeVoice(userId, vs) {
+  const d = loadVip();
+  const list = d.voice || [];
+  const i = list.findIndex((x) => x.userId === userId);
+  if (i < 0) return null;
+  const prev = list[i];
+  if (prev.channelId !== vs.channelId || Date.now() - (prev.leftAt || 0) > RESUME_GAP) return null;
+  list.splice(i, 1);
+  saveVipSoon("voice");
+  const present = new Set(usersInChannel(vs.channelId).filter((id) => id && id !== userId));
+  const peerLog = {};
+  for (const p of prev.peers || []) peerLog[p.id] = { joinedAt: p.joinedAt || prev.joinedAt, leftAt: present.has(p.id) ? null : (p.leftAt || prev.leftAt), already: !!p.already };
+  for (const id of present) if (!peerLog[id]) peerLog[id] = { joinedAt: Date.now(), leftAt: null, already: true };
+  const sess = { ...prev, peers: new Set([...(prev.peers || []).map((p) => p.id), ...present]), peerLog, events: prev.events || [] };
+  delete sess.leftAt; delete sess.cut;
+  sess.limit = Number(safe(() => ChannelStore?.getChannel?.(vs.channelId)?.userLimit)) || prev.limit || 0;
+  return sess;
+}
 function openVoice(userId, vs, already) {
+  const resumed = already ? resumeVoice(userId, vs) : null;
+  if (resumed) {
+    const n = resumed.events.length;
+    applyVoiceFlags(resumed, vs);
+    resumed.events.length = n;
+    vipVoice.set(userId, resumed);
+    vipBus.emit();
+    return resumed;
+  }
   const now = Date.now();
   const present = usersInChannel(vs.channelId).filter((id) => id !== userId && id !== undefined);
   const sess = {
@@ -5224,6 +5253,30 @@ function liveFlagsOf(userId) {
 }
 const withN = (n) => L(`com ${n}`, `with ${n}`);
 const alone = () => L("sozinho", "alone");
+function mergeSplitCalls(force) {
+  if (!force && Data.load(k("voiceMerged1"))) return;
+  const d = loadVip();
+  const list = (d.voice || []).slice().sort((a, b) => b.joinedAt - a.joinedAt);
+  const out = [];
+  let merged = 0;
+  for (const s of list) {
+    const newer = out.find((x) => x.userId === s.userId);
+    if (newer && newer.channelId === s.channelId && newer.already && newer.joinedAt - (s.leftAt || 0) <= RESUME_GAP && newer.joinedAt >= (s.leftAt || 0) - 60000) {
+      const peers = new Map((s.peers || []).map((p) => [p.id, { ...p }]));
+      for (const p of newer.peers || []) {
+        const old = peers.get(p.id);
+        peers.set(p.id, old ? { ...old, leftAt: p.leftAt || null, already: old.already } : { ...p, already: false });
+      }
+      Object.assign(newer, { joinedAt: s.joinedAt, already: !!s.already, peers: [...peers.values()], events: [...(s.events || []), ...(newer.events || [])],
+        muted: newer.muted || s.muted, deafened: newer.deafened || s.deafened, streamed: newer.streamed || s.streamed, video: newer.video || s.video, limit: newer.limit || s.limit || 0 });
+      merged++;
+      continue;
+    }
+    out.push(s);
+  }
+  if (merged) { d.voice = out; saveVipSoon("voice"); vipBus.emit(); }
+  Data.save(k("voiceMerged1"), Date.now());
+}
 function VoiceDetail({ v, live, vipId }) {
   const end = live ? Date.now() : v.leftAt;
   const peers = live
@@ -6692,6 +6745,7 @@ module.exports = class Lurk {
     Scheduler.every("servers", SERVER_EVERY, () => checkServers(), 90000);
     Scheduler.once("vipOrphans", 20000, () => migrateOrphanVips());
     Scheduler.every("vipPurge", 3600000, () => purgeExpiredVips(), 60000);
+    Scheduler.once("voiceMerge", 3000, () => mergeSplitCalls());
     Scheduler.every("voiceSync", 15000, () => syncVipVoice(), 8000);
     freqCache = null;
     replyCache = null;
