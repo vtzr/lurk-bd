@@ -54,6 +54,7 @@ const UPDATE_KEYS = [
 const CHANGELOG = [
   { version: "2.15.0", items: [
     ["new", "Calls dos VIPs: a pessoa monitorada agora aparece no topo da lista de quem está na call, com foto, nome e se está mutada, sem áudio, transmitindo a tela ou com câmera. Cada pessoa tem um botão pra abrir o perfil, e quando o canal tem limite de pessoas aparece quantos lugares estão ocupados.", "VIP calls: the person you're watching now shows at the top of who's in the call, with their photo, name and whether they're muted, deafened, sharing their screen or on camera. Everyone has a button to open their profile, and when the channel has a user limit it shows how many spots are taken."],
+    ["new", "Calls dos VIPs: cada pessoa da call mostra em quantas calls já esteve junto com o VIP e se também estava na última call dele.", "VIP calls: everyone in the call shows how many calls they've shared with the VIP and whether they were also in the VIP's last call."],
     ["improved", "Na lista de quem está na call, a pessoa monitorada e os outros VIPs agora são marcados com uma estrela no lugar de texto.", "In the list of who's in a call, the person you're watching and other VIPs are now marked with a star instead of text."],
     ["fixed", "Calls de VIPs que já estavam numa call quando o Discord abriu, ou que não são seus amigos, agora aparecem certinho. O Lurk confere a cada 15 segundos.", "Calls of VIPs who were already in a call when Discord opened, or who aren't your friends, now show up correctly. Lurk checks every 15 seconds."],
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
@@ -5242,6 +5243,15 @@ function VoiceDetail({ v, live, vipId }) {
   const inNow = live ? usersInChannel(v.channelId).length : 0;
   const limit = Number(live ? safe(() => ChannelStore?.getChannel?.(v.channelId)?.userLimit) || v.limit : v.limit) || 0;
   const total = peers.length + (vipId ? 1 : 0);
+  const history = vipId ? (loadVip().voice || []).filter((x) => x.userId === vipId).sort((a, b) => b.joinedAt - a.joinedAt) : [];
+  const prevSession = live ? history[0] : history.find((x) => x.joinedAt < v.joinedAt);
+  const together = (pid) => history.filter((x) => (x.peers || []).some((q) => q.id === pid)).length + (live ? 1 : 0);
+  const wasInPrev = (pid) => !!prevSession && (prevSession.peers || []).some((q) => q.id === pid);
+  const companyLine = (pid) => {
+    if (!vipId) return null;
+    const n = together(pid);
+    return joinNodes([L(`${n} ${plural(n, "call", "calls")} com ${nameOf(vipId, getVipList()[vipId] || {})}`, `${n} ${plural(n, "call", "calls")} with ${nameOf(vipId, getVipList()[vipId] || {})}`), wasInPrev(pid) ? h("span", { className: "dmtt-vprev" }, L("também na última call", "also in the last call")) : null]);
+  };
   return h("div", { className: "dmtt-sub dmtt-vdetail" },
     h("div", { className: "dmtt-mini-h" }, live ? L(`Na call · ${inNow || total}`, `In the call · ${inNow || total}`) : L(`Quem estava · ${total}`, `Who was there · ${total}`)),
     limit ? h("div", { className: "dmtt-muted dmtt-small dmtt-vlimit" }, live ? L(`${inNow || total} de ${limit} lugares ocupados`, `${inNow || total} of ${limit} spots taken`) : L(`Limite da call: ${limit} ${plural(limit, "pessoa", "pessoas")}`, `Call limit: ${limit} ${plural(limit, "person", "people")}`)) : null,
@@ -5262,7 +5272,8 @@ function VoiceDetail({ v, live, vipId }) {
         h(Avatar, { userId: p.id, url: p.avatarURL, size: 26 }),
         h("span", { className: "dmtt-row-main" },
           h("span", { className: "dmtt-row-title dmtt-small" }, p.name || nameOf(p.id), p.username ? h("span", { className: "dmtt-row-user" }, ` @${p.username}`) : null),
-          range ? h("span", { className: "dmtt-row-sub" }, range) : null),
+          range ? h("span", { className: "dmtt-row-sub" }, range) : null,
+          vipId ? h("span", { className: "dmtt-row-sub" }, companyLine(p.id)) : null),
         flags ? h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => flags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))) : null,
         isVip(p.id) ? h(VipBadge, null) : null,
         profileBtn(p.id));
@@ -6440,6 +6451,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-vpeer-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: var(--c-fill2); color: var(--c-link); cursor: pointer; transition: background-color .15s ease; }
 .dmtt-vpeer-btn:hover { background: var(--c-hover); }
 .dmtt-vlimit { margin: -4px 0 4px; }
+.dmtt-vprev { color: #ff9f0a; }
 .dmtt-vt { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .dmtt-vt > .dmtt-num { width: 56px; flex: none; }
 .dmtt-vt-dot { width: 13px; display: inline-flex; justify-content: center; flex: none; }
