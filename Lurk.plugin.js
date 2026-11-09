@@ -54,6 +54,7 @@ const UPDATE_KEYS = [
 const CHANGELOG = [
   { version: "2.15.0", items: [
     ["new", "Calls dos VIPs: a pessoa monitorada agora aparece no topo da lista de quem está na call, com foto, nome e se está mutada, sem áudio, transmitindo a tela ou com câmera. Cada pessoa tem um botão pra abrir o perfil, e quando o canal tem limite de pessoas aparece quantos lugares estão ocupados.", "VIP calls: the person you're watching now shows at the top of who's in the call, with their photo, name and whether they're muted, deafened, sharing their screen or on camera. Everyone has a button to open their profile, and when the channel has a user limit it shows how many spots are taken."],
+    ["improved", "Na lista de quem está na call, a pessoa monitorada e os outros VIPs agora são marcados com uma estrela no lugar de texto.", "In the list of who's in a call, the person you're watching and other VIPs are now marked with a star instead of text."],
     ["fixed", "Calls de VIPs que já estavam numa call quando o Discord abriu, ou que não são seus amigos, agora aparecem certinho. O Lurk confere a cada 15 segundos.", "Calls of VIPs who were already in a call when Discord opened, or who aren't your friends, now show up correctly. Lurk checks every 15 seconds."],
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
     ["improved", "Histórico VIP › Mensagens não mostra mais as mensagens normais do seu privado com o VIP, que você já viu. Do privado aparecem só as editadas e apagadas. Mensagens de servidores e grupos continuam todas lá, e a busca continua achando tudo.", "VIP history › Messages no longer shows regular messages from your DMs with the VIP, which you've already seen. From DMs, only edited and deleted ones show up. Messages from servers and groups are all still there, and search still finds everything."],
@@ -5184,6 +5185,11 @@ function VersionTimeline({ m }) {
   return h("div", { className: "dmtt-ver", role: "list" }, rows);
 }
 
+function VipBadge({ watched }) {
+  const label = watched ? L("Pessoa monitorada", "Person you're watching") : L("Está na sua Lista VIP", "On your VIP list");
+  return h("span", { className: `dmtt-tag dmtt-vipstar ${watched ? "is-orange" : "is-vip"}`, title: label, role: "img", "aria-label": label },
+    h("svg", { viewBox: "0 0 24 24", width: 13, height: 13, "aria-hidden": "true" }, h("path", { d: SI.star, fill: "currentColor" })));
+}
 function PeerStack({ peers, max = 4 }) {
   if (!peers?.length) return null;
   return h("span", { className: "dmtt-peers", title: peers.map((p) => p.name).join(", ") },
@@ -5245,7 +5251,7 @@ function VoiceDetail({ v, live, vipId }) {
         h("span", { className: "dmtt-row-title dmtt-small" }, nameOf(vipId, getVipList()[vipId] || {}), vipUser?.username ? h("span", { className: "dmtt-row-user" }, ` @${vipUser.username}`) : null),
         h("span", { className: "dmtt-row-sub" }, joinNodes([v.already ? L("já estava", "already there") : L(`entrou ${fmtHM(v.joinedAt)}`, `joined ${fmtHM(v.joinedAt)}`), live ? L("na call", "in the call") : L(`saiu ${fmtHM(v.leftAt)}`, `left ${fmtHM(v.leftAt)}`)]))),
       h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => vipFlags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))),
-      h("span", { className: "dmtt-tag is-orange" }, L("Monitorando", "Watching")),
+      h(VipBadge, { watched: true }),
       profileBtn(vipId)) : null,
     peers.length ? peers.map((p) => {
       const flags = live && !p.leftAt ? liveFlagsOf(p.id) : null;
@@ -5258,7 +5264,7 @@ function VoiceDetail({ v, live, vipId }) {
           h("span", { className: "dmtt-row-title dmtt-small" }, p.name || nameOf(p.id), p.username ? h("span", { className: "dmtt-row-user" }, ` @${p.username}`) : null),
           range ? h("span", { className: "dmtt-row-sub" }, range) : null),
         flags ? h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => flags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))) : null,
-        isVip(p.id) ? h("span", { className: "dmtt-tag" }, "VIP") : null,
+        isVip(p.id) ? h(VipBadge, null) : null,
         profileBtn(p.id));
     }) : h("div", { className: "dmtt-muted dmtt-small" }, live ? L("Está sozinho na call.", "Alone in the call.") : L("Ficou sozinho na call.", "Was alone in the call.")),
     h("div", { className: "dmtt-mini-h" }, L("Linha do tempo", "Timeline")),
@@ -6588,6 +6594,8 @@ button.dmtt-fr > .dmtt-chev { align-self: center; }
 .dmtt-freq-empty { font-size: 12px; color: var(--c-muted); line-height: 1.4; }
 .dmtt-tag.is-purple { background: rgba(191, 90, 242, .16); color: #bf5af2; }
 .dmtt-tag.is-orange { background: rgba(255, 159, 10, .16); color: #ff9f0a; }
+.dmtt-tag.is-vip { background: rgba(255, 204, 0, .16); color: #ffcc00; }
+.dmtt-vipstar { display: inline-flex; align-items: center; justify-content: center; padding: 3px 7px; }
 .dmtt-tag.is-nitro { background: rgba(255, 115, 250, .16); color: #ff73fa; }
 .dmtt-guild-ic { width: 28px; height: 28px; border-radius: 8px; flex: none; object-fit: cover; }
 .dmtt-guild-ic.is-text { display: flex; align-items: center; justify-content: center; background: var(--background-modifier-accent, #4e5058); color: var(--text-default); font-size: 10px; font-weight: 600; }
