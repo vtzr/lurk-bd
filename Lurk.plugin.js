@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.15.0", items: [
+    ["fixed", "Calls de VIPs que já estavam numa call quando o Discord abriu, ou que não são seus amigos, agora aparecem certinho. O Lurk confere a cada 15 segundos.", "Calls of VIPs who were already in a call when Discord opened, or who aren't your friends, now show up correctly. Lurk checks every 15 seconds."],
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
     ["improved", "Histórico VIP › Mensagens não mostra mais as mensagens normais do seu privado com o VIP, que você já viu. Do privado aparecem só as editadas e apagadas. Mensagens de servidores e grupos continuam todas lá, e a busca continua achando tudo.", "VIP history › Messages no longer shows regular messages from your DMs with the VIP, which you've already seen. From DMs, only edited and deleted ones show up. Messages from servers and groups are all still there, and search still finds everything."],
     ["new", "Quando um VIP é pego invisível, o \"offline há…\" vira \"visto invisível há…\", contando desde a última atividade dele. Aparece nas mensagens diretas, no topo da conversa, na Lista VIP e no perfil do VIP. Fica assim até a pessoa aparecer online, ausente ou não perturbe de novo.", "When a VIP is caught invisible, \"offline for…\" becomes \"seen invisible … ago\", counting from their last activity. It shows in your DM list, at the top of the conversation, in the VIP list and on the VIP's page. It stays that way until they show up as online, idle or do not disturb again."],
@@ -2082,9 +2083,24 @@ function openVoice(userId, vs, already) {
     muted: false, deafened: false, streamed: false, video: false,
   };
   applyVoiceFlags(sess, vs);
+  sess.events = [];
   vipVoice.set(userId, sess);
   vipBus.emit();
   return sess;
+}
+function syncVipVoice() {
+  if (!getSettings().vipTrackVoice || !VoiceStateStore) return;
+  let changed = false;
+  for (const id of Object.keys(getVipList())) {
+    const vs = normVS(safe(() => VoiceStateStore.getVoiceStateForUser(id)));
+    const cid = vs?.channelId || null;
+    const cur = vipVoice.get(id);
+    if ((cur?.channelId || null) === cid) { if (cur && vs) { applyVoiceFlags(cur, vs); } continue; }
+    if (cur) closeVoice(id);
+    if (cid) { openVoice(id, { ...vs, userId: id }, true); safe(() => checkInvisible(id, "voice", null)); }
+    changed = true;
+  }
+  if (changed) vipBus.emit();
 }
 function closeVoice(userId, cut) {
   const v = vipVoice.get(userId);
@@ -6579,7 +6595,7 @@ const SUBS = {
   MESSAGE_REACTION_REMOVE: onReactionRemove,
   VOICE_STATE_UPDATES: onVoiceStates,
   USER_PROFILE_FETCH_SUCCESS: onProfileFetched,
-  CONNECTION_OPEN: () => { setTimeout(subscribeVipGuilds, 3000); setTimeout(() => safe(() => initFriends()), 5000); },
+  CONNECTION_OPEN: () => { setTimeout(subscribeVipGuilds, 3000); setTimeout(() => safe(() => syncVipVoice()), 4000); setTimeout(() => safe(() => initFriends()), 5000); },
 };
 
 module.exports = class Lurk {
@@ -6633,6 +6649,7 @@ module.exports = class Lurk {
     Scheduler.every("servers", SERVER_EVERY, () => checkServers(), 90000);
     Scheduler.once("vipOrphans", 20000, () => migrateOrphanVips());
     Scheduler.every("vipPurge", 3600000, () => purgeExpiredVips(), 60000);
+    Scheduler.every("voiceSync", 15000, () => syncVipVoice(), 8000);
     freqCache = null;
     replyCache = null;
     unusualCache = null;
