@@ -57,6 +57,7 @@ const CHANGELOG = [
     ["new", "Calls dos VIPs: cada pessoa da call mostra em quantas calls já esteve junto com o VIP e se também estava na última call dele.", "VIP calls: everyone in the call shows how many calls they've shared with the VIP and whether they were also in the VIP's last call."],
     ["fixed", "Quando o Lurk recarrega (numa atualização, por exemplo) com um VIP em call, ela continua sendo a mesma call em vez de contar como uma nova. As calls que já tinham sido divididas assim são juntadas de novo.", "When Lurk reloads (on an update, for example) while a VIP is in a call, it stays the same call instead of counting as a new one. Calls that were already split this way are merged back."],
     ["fixed", "O \"offline há…\" não aparecia pra VIPs que ficaram offline enquanto o Lurk estava fechado ou recarregando. Agora aparece, contando a partir da última vez que o Lurk viu a pessoa online.", "\"Offline for…\" didn't show for VIPs who went offline while Lurk was closed or reloading. It now shows, counting from the last time Lurk saw them online."],
+    ["fixed", "Um VIP invisível em call gerava um \"visto invisível\" novo a cada 5 minutos. Agora é um registro só por call, mostrando há quanto tempo a pessoa está na call invisível, e o aviso chega uma vez só. Os registros repetidos que já existiam foram juntados.", "An invisible VIP in a call created a new \"seen invisible\" every 5 minutes. Now it's a single entry per call that shows how long they've been in the call invisible, and you get one notification. Existing repeated entries were merged."],
     ["improved", "Na lista de quem está na call, a pessoa monitorada e os outros VIPs agora são marcados com uma estrela no lugar de texto.", "In the list of who's in a call, the person you're watching and other VIPs are now marked with a star instead of text."],
     ["fixed", "Calls de VIPs que já estavam numa call quando o Discord abriu, ou que não são seus amigos, agora aparecem certinho. O Lurk confere a cada 15 segundos.", "Calls of VIPs who were already in a call when Discord opened, or who aren't your friends, now show up correctly. Lurk checks every 15 seconds."],
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
@@ -1691,7 +1692,33 @@ const INVIS_VIA = {
 function invisViaText(e, cap) {
   const [low, up] = (INVIS_VIA[e.via] || INVIS_VIA.message)();
   const where = e.where ? L(` em ${e.where}`, ` in ${e.where}`) : e.via === "typing" || e.via === "message" ? L(" pra você", " to you") : "";
-  return (cap ? up : low) + where;
+  let extra = "";
+  if (e.via === "voice" && e.until && e.until - e.at >= 60000) {
+    const still = e.userId && vipVoice.get(e.userId)?.joinedAt === e.callAt && rawPresence(e.userId)?.status === "offline";
+    extra = still ? L(` · há ${fmtDur(Date.now() - e.at)}, ainda em call`, ` · for ${fmtDur(Date.now() - e.at)}, still in the call`) : L(` · por ${fmtDur(e.until - e.at)}`, ` · for ${fmtDur(e.until - e.at)}`);
+  }
+  return (cap ? up : low) + where + extra;
+}
+function mergeInvisibleCallEvents(force) {
+  if (!force && Data.load(k("invisMerged1"))) return;
+  const d = loadVip();
+  const out = [];
+  let merged = 0;
+  for (const e of d.events) {
+    if (e.type === "invisible" && e.via === "voice") {
+      const newer = out.find((x) => x.type === "invisible" && x.userId === e.userId);
+      if (newer && newer.via === "voice" && newer.at - e.at <= 6 * 60000 && newer.at >= e.at) {
+        newer.until = Math.max(newer.until || newer.at, e.until || e.at);
+        newer.at = e.at;
+        merged++;
+        continue;
+      }
+      if (!e.until) e.until = e.at;
+    }
+    out.push(e);
+  }
+  if (merged) { d.events = out; saveVipSoon("events"); vipBus.emit(); }
+  Data.save(k("invisMerged1"), Date.now());
 }
 function checkInvisible(userId, via, where) {
   if (!isVip(userId)) return;
@@ -1700,10 +1727,18 @@ function checkInvisible(userId, via, where) {
   getInvisAct()[userId] = Date.now();
   saveInvisSoon();
   safe(() => placeLastSeen());
-  const last = invisibleThrottle.get(userId) || 0;
-  if (Date.now() - last < 5 * 60000) return;
-  invisibleThrottle.set(userId, Date.now());
-  addVipEvent({ type: "invisible", userId, at: Date.now(), via, where: where || null });
+  const call = via === "voice" ? vipVoice.get(userId) : null;
+  if (call) {
+    const d = loadVip();
+    const open = d.events.find((e) => e.type === "invisible" && e.userId === userId && e.via === "voice" && e.callAt === call.joinedAt);
+    if (open) { open.until = Date.now(); saveVipSoon("events"); vipBus.emit(); return; }
+    addVipEvent({ type: "invisible", userId, at: Date.now(), until: Date.now(), via, where: where || null, callAt: call.joinedAt });
+  } else {
+    const last = invisibleThrottle.get(userId) || 0;
+    if (Date.now() - last < 5 * 60000) return;
+    invisibleThrottle.set(userId, Date.now());
+    addVipEvent({ type: "invisible", userId, at: Date.now(), via, where: where || null });
+  }
   const s = getSettings();
   if (vipFlag(userId, "notifyInvisible")) {
     notify({
@@ -6762,7 +6797,7 @@ module.exports = class Lurk {
     Scheduler.every("servers", SERVER_EVERY, () => checkServers(), 90000);
     Scheduler.once("vipOrphans", 20000, () => migrateOrphanVips());
     Scheduler.every("vipPurge", 3600000, () => purgeExpiredVips(), 60000);
-    Scheduler.once("voiceMerge", 3000, () => mergeSplitCalls());
+    Scheduler.once("voiceMerge", 3000, () => { mergeSplitCalls(); mergeInvisibleCallEvents(); });
     Scheduler.every("voiceSync", 15000, () => syncVipVoice(), 8000);
     Scheduler.every("alive", 5 * 60000, () => safe(() => Data.save(k("aliveAt"), Date.now())), 5 * 60000);
     freqCache = null;
