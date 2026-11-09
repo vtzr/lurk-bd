@@ -56,6 +56,7 @@ const CHANGELOG = [
     ["new", "Calls dos VIPs: a pessoa monitorada agora aparece no topo da lista de quem está na call, com foto, nome e se está mutada, sem áudio, transmitindo a tela ou com câmera. Cada pessoa tem um botão pra abrir o perfil, e quando o canal tem limite de pessoas aparece quantos lugares estão ocupados.", "VIP calls: the person you're watching now shows at the top of who's in the call, with their photo, name and whether they're muted, deafened, sharing their screen or on camera. Everyone has a button to open their profile, and when the channel has a user limit it shows how many spots are taken."],
     ["new", "Calls dos VIPs: cada pessoa da call mostra em quantas calls já esteve junto com o VIP e se também estava na última call dele.", "VIP calls: everyone in the call shows how many calls they've shared with the VIP and whether they were also in the VIP's last call."],
     ["fixed", "Quando o Lurk recarrega (numa atualização, por exemplo) com um VIP em call, ela continua sendo a mesma call em vez de contar como uma nova. As calls que já tinham sido divididas assim são juntadas de novo.", "When Lurk reloads (on an update, for example) while a VIP is in a call, it stays the same call instead of counting as a new one. Calls that were already split this way are merged back."],
+    ["fixed", "O \"offline há…\" não aparecia pra VIPs que ficaram offline enquanto o Lurk estava fechado ou recarregando. Agora aparece, contando a partir da última vez que o Lurk viu a pessoa online.", "\"Offline for…\" didn't show for VIPs who went offline while Lurk was closed or reloading. It now shows, counting from the last time Lurk saw them online."],
     ["improved", "Na lista de quem está na call, a pessoa monitorada e os outros VIPs agora são marcados com uma estrela no lugar de texto.", "In the list of who's in a call, the person you're watching and other VIPs are now marked with a star instead of text."],
     ["fixed", "Calls de VIPs que já estavam numa call quando o Discord abriu, ou que não são seus amigos, agora aparecem certinho. O Lurk confere a cada 15 segundos.", "Calls of VIPs who were already in a call when Discord opened, or who aren't your friends, now show up correctly. Lurk checks every 15 seconds."],
     ["new", "Histórico VIP › Mensagens agora mostra as reações dos VIPs, com o emoji certinho e a mensagem em que reagiram, inclusive no seu privado. Se o VIP tirar a reação, aparece \"reagiu e tirou\" com quanto tempo ela ficou. Tem um filtro \"Reações\" e um aviso novo, \"Tirar uma reação\", desligado por padrão.", "VIP history › Messages now shows VIP reactions, with the right emoji and the message they reacted to, including in your DMs. If the VIP removes it, it shows \"reacted, then removed it\" with how long it stayed. There's a \"Reactions\" filter and a new \"They remove a reaction\" alert, off by default."],
@@ -2435,7 +2436,7 @@ function markSeen2(id, online) {
   if (online) clearInvisible(id);
   const all = getSeen();
   const cur = all[id] || {};
-  all[id] = online ? { ...cur, state: "online", onlineAt: Date.now() } : { ...cur, state: "offline", offlineAt: Date.now() };
+  all[id] = online ? { ...cur, state: "online", onlineAt: Date.now(), approx: false } : { ...cur, state: "offline", offlineAt: Date.now(), approx: false };
   saveSeen();
 }
 function initSeen() {
@@ -2444,6 +2445,8 @@ function initSeen() {
   reactCache = null;
   const all = getSeen();
   const events = loadVip().events;
+  const aliveAt = Number(Data.load(k("aliveAt"))) || null;
+  const guess = (id, e) => aliveAt || Math.max(e?.onlineAt || 0, e?.offlineAt || 0, events.find((x) => x.userId === id && x.type === "presence")?.at || 0) || null;
   for (const id of Object.keys(getVipList())) {
     const st = rawPresence(id)?.status;
     if (!st) continue;
@@ -2457,7 +2460,9 @@ function initSeen() {
       const latest = pres[0];
       e = latest ? { state: isOnlineStatus(latest.to) ? "online" : "offline", offlineAt: lastOff?.at || null, onlineAt: lastOn?.at || null } : { state: null };
     }
-    if (e.state !== (online ? "online" : "offline")) e = online ? { ...e, state: "online", onlineAt: null } : { ...e, state: "offline", offlineAt: null };
+    if (e.state !== (online ? "online" : "offline")) e = online ? { ...e, state: "online", onlineAt: guess(id, e), approx: true } : { ...e, state: "offline", offlineAt: guess(id, e), approx: true };
+    else if (!online && !e.offlineAt) e = { ...e, offlineAt: guess(id, e), approx: true };
+    else if (online && !e.onlineAt) e = { ...e, onlineAt: guess(id, e), approx: true };
     all[id] = e;
   }
   saveSeen();
@@ -2469,9 +2474,9 @@ function lastSeenInfo(id) {
   if (inv) return { kind: "invisible", at: inv };
   const e = getSeen()[id];
   if (!e) return null;
-  if (!isOnlineStatus(st)) return e.state === "offline" && e.offlineAt ? { kind: "offline", at: e.offlineAt } : null;
+  if (!isOnlineStatus(st)) return e.state === "offline" && e.offlineAt ? { kind: "offline", at: e.offlineAt, approx: !!e.approx } : null;
   if (getSettings().vipLastSeenMode !== "both") return null;
-  return e.state === "online" && e.onlineAt ? { kind: "online", at: e.onlineAt } : null;
+  return e.state === "online" && e.onlineAt ? { kind: "online", at: e.onlineAt, approx: !!e.approx } : null;
 }
 function fmtSeen({ kind, at }) {
   const diff = Date.now() - at;
@@ -2490,7 +2495,7 @@ function fmtSeen({ kind, at }) {
   const d = new Date(at);
   return L(`${kind} desde ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`, `${kind} since ${pad(d.getMonth() + 1)}/${pad(d.getDate())}`);
 }
-const fmtSeenTitle = ({ kind, at }) => kind === "invisible" ? L(`Aparece offline, mas teve atividade ${fmtDM(at)}`, `Shows offline, but was active ${fmtDM(at)}`) : `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
+const fmtSeenTitle = ({ kind, at, approx }) => approx && kind === "offline" ? L(`Ficou offline enquanto o Lurk estava fechado, depois de ${fmtDM(at)}`, `Went offline while Lurk was closed, after ${fmtDM(at)}`) : approx && kind === "online" ? L(`Ficou online enquanto o Lurk estava fechado, depois de ${fmtDM(at)}`, `Came online while Lurk was closed, after ${fmtDM(at)}`) : kind === "invisible" ? L(`Aparece offline, mas teve atividade ${fmtDM(at)}`, `Shows offline, but was active ${fmtDM(at)}`) : `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 function initPresenceCache() {
   presenceCache.clear();
   for (const id of Object.keys(getVipList())) presenceCache.set(id, rawPresence(id));
@@ -6757,6 +6762,7 @@ module.exports = class Lurk {
     Scheduler.every("vipPurge", 3600000, () => purgeExpiredVips(), 60000);
     Scheduler.once("voiceMerge", 3000, () => mergeSplitCalls());
     Scheduler.every("voiceSync", 15000, () => syncVipVoice(), 8000);
+    Scheduler.every("alive", 5 * 60000, () => safe(() => Data.save(k("aliveAt"), Date.now())), 5 * 60000);
     freqCache = null;
     replyCache = null;
     unusualCache = null;
@@ -6835,6 +6841,7 @@ module.exports = class Lurk {
   }
 
   stop() {
+    try { if (myId() !== "unknown") Data.save(k("aliveAt"), Date.now()); } catch {}
     lurkAlive = false;
     clearTimeout(diagTimer);
     try { for (const [ev, fn] of Object.entries(SUBS)) Dispatcher?.unsubscribe(ev, fn); } catch {}
