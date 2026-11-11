@@ -23,8 +23,8 @@ A [BetterDiscord](https://betterdiscord.app) plugin by [Vitor](https://github.co
 
 ### ⭐ VIP list
 Add people from their right-click menu or by user ID, and Lurk keeps a closer watch on them:
-- **Status timeline**: online, idle, DND, offline and device, plus time online today. Lurk can tell when a friend is **invisible** (they show as offline but are typing or sending messages).
-- **Last online** under their name in your DM list ("offline for 2h"). Optionally also how long they've been online, at the top of the open conversation and in server member lists.
+- **Status timeline**: online, idle, DND, offline and device, plus time online today. Lurk can tell when a VIP is **invisible**: they show as offline but are typing, sending, editing or deleting messages, reacting, or sitting in a call.
+- **Last online** under their name in your DM list ("offline for 2h"). When a VIP is caught invisible it becomes "seen invisible 5m ago", counting from their last activity until they show up online again. Optionally also how long they've been online, at the top of the open conversation and in server member lists.
 - **Profile changes**: name, username and avatar changes for every VIP, with the old and new avatar side by side.
 - **Now**: a line on their page, based on their routine, saying when they usually log off or when they'll probably be back.
 - **Watch profile** for one VIP at a time: connected accounts added or removed, bio, pronouns and banner, checked every 15 minutes. Turn it on in the VIP's alerts.
@@ -33,7 +33,7 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 - **Notes**: personal dated notes for each VIP.
 - **Important dates**: birthday, how long you've been friends and your own dates, with a notification on the day (when Discord opens or at midnight, or at a time you choose).
 - **Typed & quit in servers**, across all your shared servers. Experimental and off by default; Lurk explains the risks before you turn it on.
-- **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
+- **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes. Each person shows how many calls they've shared with the VIP and whether they were in the last one, with a button to open their profile and the channel's user limit.
 - **Routine**: a map of the days and hours they're usually online over the last 4 weeks, their most active hours and day, daily average, when they usually come online and leave, this week compared with last week, the best time to talk to them, when they talk the most, whether they're on desktop or mobile, how long each of you usually takes to reply in DMs, and how long you're both online together.
 - **Unusual activity**: optional alerts when a VIP comes online at an hour they almost never do, or stays online much longer than usual.
 - **Shared servers**: an optional alert when a VIP joins or leaves a server you share. The VIP history shows the server, when they joined, when they left and how long they stayed.
@@ -42,7 +42,8 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 
 ### 🕘 VIP history
 A single feed (clock button in the top bar) with an unread badge:
-- **Messages**: every message your VIPs sent, with filters for deleted, edited and server messages you asked to be notified about, in DMs and servers.
+- **Messages**: every message your VIPs sent in servers and groups, plus edited and deleted ones from your DMs, with filters for deleted, edited and server messages you asked to be notified about.
+- **Reactions**: every reaction your VIPs add, with the emoji and the message, and the ones they take back.
 - **Search** through all VIP messages by text, person, channel or server, optionally including old messages.
 - **Old messages**: when VIP messages reach the limit, the oldest ones are archived instead of deleted. Browse, search or delete each archive right inside Lurk.
 - **Status**: every status change.
