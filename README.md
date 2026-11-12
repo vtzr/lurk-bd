@@ -28,12 +28,16 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 - **Profile changes**: name, username and avatar changes for every VIP, with the old and new avatar side by side.
 - **Now**: a line on their page, based on their routine, saying when they usually log off or when they'll probably be back.
 - **Watch profile** for one VIP at a time: connected accounts added or removed, bio, pronouns and banner, checked every 15 minutes. Turn it on in the VIP's alerts.
+- **Day**: one timeline with everything the VIP did that day, in order: status, calls, messages, edits, deletions, reactions and profile changes. Browse day by day.
 - **Messages** in shared servers and DMs, including **edited and deleted** messages and their attachments.
 - **Photos and videos**: VIPs' photos, videos, GIFs and other attachments are saved on your computer as they arrive, so they stay viewable after the message is deleted. Preview them right in Lurk, open them full screen or in their folder. Every avatar they've had (and every banner, for the watched profile) is kept too, with its own size limit that never removes the current one. Folder, file and avatar size limits in Settings. A **Gallery** button shows everything saved for that person in one grid.
 - **Notes**: personal dated notes for each VIP.
 - **Important dates**: birthday, how long you've been friends and your own dates, with a notification on the day (when Discord opens or at midnight, or at a time you choose).
 - **Typed & quit in servers**, across all your shared servers. Experimental and off by default; Lurk explains the risks before you turn it on.
 - **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes. Each person shows how many calls they've shared with the VIP and whether they were in the last one, with a button to open their profile and the channel's user limit.
+- **Call companions**: a ranking of who the VIP shares calls with the most, with how many calls, how long together and when the last one was.
+- **Combo alerts**: tap the bell next to someone in a call and Lurk tells you whenever the VIP is in a call with that person.
+- **Export history**: save everything Lurk has about one VIP to a file.
 - **Routine**: a map of the days and hours they're usually online over the last 4 weeks, their most active hours and day, daily average, when they usually come online and leave, this week compared with last week, the best time to talk to them, when they talk the most, whether they're on desktop or mobile, how long each of you usually takes to reply in DMs, and how long you're both online together.
 - **Unusual activity**: optional alerts when a VIP comes online at an hour they almost never do, or stays online much longer than usual.
 - **Shared servers**: an optional alert when a VIP joins or leaves a server you share. The VIP history shows the server, when they joined, when they left and how long they stayed.
@@ -63,10 +67,12 @@ Off by default; turn it on in **Settings › Requests**. A top bar button with a
 - **Quick filters**: All · Mutual · New account · Bots.
 - **Spam filter**: pick servers to ignore and requests from their members go to **Spam** (right at the top of the list), even if they leave the server afterwards. Optionally send possible bots, or people you already declined, to Spam too.
 - **Bulk actions**: decline all possible bots, or everything in Spam, up to 25 at a time with a few seconds between each.
+- **Sent requests**: the requests you sent that are still pending, with how long ago you sent each one. Cancel a request or view the profile right from the card.
 - **Removed you**: people who unfriended you, including while your Discord was closed. Click a card to open the DM.
 - **Gave up**: people who started reaching out and gave up.
   - **First-time typers**: someone who never talked to you typed and stopped without sending. People who do send aren't listed, which keeps spam bots out.
   - **Canceled friend requests**: someone sent you a request and took it back. Click a card to open their profile.
+  - **Declined requests**: someone declined a request you sent. You get an alert and it's kept here with when you sent it and when it was declined.
   - People who give up more than once get a "2nd time" tag that shows the earlier times.
 - **Search** by name or @ in new requests, Spam and who removed you.
 
@@ -74,6 +80,11 @@ Off by default; turn it on in **Settings › Requests**. A top bar button with a
 Total time in calls with each person, kept forever, plus the details of your recent calls (when, where and who was there).
 
 ### And also
+- **Global search**: one field at the top of Lurk's home that looks for a person or text across everything at once.
+- **Week in review**: who typed & quit the most, the VIPs online and in calls the longest, who deleted the most and the other numbers from the last 7 days. It only shows when you open it.
+- **Quiet hours**: optional and off by default. Pick a time range and Lurk stops notifying during it, while still logging everything.
+- **Lurk health**: a page in Settings that shows whether each part of Lurk is working after a Discord update.
+- **Welcome screen** the first time you open Lurk, explaining what already works and what's worth turning on.
 - **Discreet mode**: hides Lurk's buttons and counters, the typing avatar and "offline for…", and silences notifications, while Lurk keeps logging. Toggle it with **Ctrl+Shift+L** (you can change the shortcut), and optionally turn it on automatically while you share your screen.
 - **New items are highlighted**, with red counters showing what you haven't seen yet.
 - **Notifications** per event: in-app toast, desktop notification and/or sound, with a master switch for in-app toasts.
