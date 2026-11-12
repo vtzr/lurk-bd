@@ -53,6 +53,9 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.16.0", items: [
+    ["new", "Busca geral: o campo no topo do Início procura uma pessoa ou um texto em todo o Lurk de uma vez (VIPs, Digitou e apagou, mensagens dos VIPs, Menções, Desistiram, calls e Solicitações).", "Global search: the field at the top of Home looks for a person or text across all of Lurk at once (VIPs, Typed & quit, VIP messages, Mentions, Gave up, calls and Requests)."],
+    ["new", "Início › Resumo da semana: quem mais digitou e apagou, VIPs com mais tempo online e em call, quem mais apagou mensagens e os outros números dos últimos 7 dias. Só aparece quando você abre.", "Home › Week in review: who typed & quit the most, VIPs online and in calls the longest, who deleted the most and the other numbers from the last 7 days. It only shows when you open it."],
+    ["new", "Boas-vindas: na primeira vez que o Lurk é aberto, uma tela curta explica o que já funciona e o que vale ligar.", "Welcome: the first time Lurk is opened, a short screen explains what already works and what's worth turning on."],
     ["new", "Perfil do VIP › Exportar histórico: salva num arquivo tudo que o Lurk tem daquela pessoa.", "VIP page › Export history: saves everything Lurk has on that person to a file."],
     ["new", "Perfil do VIP › Calls › Companhias de call: ranking de com quem o VIP mais fica em call, com quantas calls, quanto tempo juntos e quando foi a última.", "VIP page › Calls › Call companions: a ranking of who the VIP is in calls with the most, with how many calls, how long together and when the last one was."],
     ["new", "Aviso por combinação: o sino ao lado de cada pessoa da call avisa quando o VIP estiver em call com ela. Os avisos ligados aparecem em \"Avisar quando\".", "Combo alerts: the bell next to each person in a call alerts you when the VIP is in a call with them. Active alerts show up under \"Notify me when\"."],
@@ -4209,6 +4212,8 @@ const NAMES = {
   vip: () => L("Lista VIP", "VIP list"),
   calls: () => L("Tempo em call", "Call time"),
   settings: () => L("Ajustes", "Settings"),
+  week: () => L("Resumo da semana", "Week in review"),
+  welcome: () => L("Boas-vindas", "Welcome"),
 };
 function screenTitle(s) {
   switch (s.type) {
@@ -4226,7 +4231,7 @@ function screenTitle(s) {
 }
 function App({ initial, onClose }) {
   useBus(settingsBus);
-  const [stack, setStack] = React.useState(() => (initial?.length ? initial : [{ type: "home" }]));
+  const [stack, setStack] = React.useState(() => { const st = initial?.length ? initial : [{ type: "home" }]; return st.length === 1 && st[0].type === "home" && shouldWelcome() ? [...st, { type: "welcome" }] : st; });
   const bodyRef = React.useRef(null);
   const appRef = React.useRef(null);
 
@@ -4330,6 +4335,8 @@ function ScreenRouter({ s }) {
     case "settingsPage": return h(SettingsPageScreen, { id: s.id });
     case "archives": return h(ArchivesScreen);
     case "archiveBlock": return h(ArchiveBlockScreen, { file: s.file });
+    case "week": return h(WeekScreen);
+    case "welcome": return h(WelcomeScreen);
     default: return null;
   }
 }
@@ -4356,10 +4363,129 @@ function counts() {
     changesNew: newChangesCount() + newProfileCount(),
   };
 }
+function shouldWelcome() {
+  if (Data.load("welcomed")) return false;
+  const used = Object.keys(getVipList()).length || getHistory().length || safe(() => loadMentions().events.length);
+  if (used) { Data.save("welcomed", Date.now()); return false; }
+  return true;
+}
+function WelcomeScreen() {
+  useBus(settingsBus);
+  const nav = useNav();
+  React.useEffect(() => { Data.save("welcomed", Date.now()); }, []);
+  const done = (to) => { nav.pop(); if (to) setTimeout(() => nav.push(to), 0); };
+  const item = (icon, color, title, text) => h("div", { className: "dmtt-row dmtt-welcome-row" },
+    h(IconTile, { name: icon, color, size: 30 }),
+    h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, title), h("span", { className: "dmtt-row-sub" }, text)));
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: L("Bem-vindo ao Lurk", "Welcome to Lurk"), subtitle: L("O que ele já está fazendo e o que vale ligar primeiro", "What it's already doing and what's worth turning on first") }),
+    h(Group, { header: L("Já está funcionando", "Already working") },
+      item("keyboard", "#0a84ff", NAMES.typing(), L("Quem começa a digitar pra você no privado e desiste aparece aqui, com a foto na barra de servidores na hora.", "People who start typing to you in DMs and give up show up here, with their avatar in the server bar right away.")),
+      item("at", "#ff9f0a", NAMES.mentions(), L("Ghost pings, respostas apagadas e reações retiradas das suas mensagens.", "Ghost pings, deleted replies and reactions removed from your messages."))),
+    h(Group, { header: L("Vale configurar", "Worth setting up") },
+      item("star", "#ffcc00", NAMES.vip(), L("Adicione quem você quer acompanhar de perto: status, visto invisível, calls, mensagens apagadas e editadas, reações e rotina.", "Add the people you want to follow closely: status, seen invisible, calls, deleted and edited messages, reactions and routine.")),
+      h(SettingRow, { item: { ...sw("friendsEnabled", L("Ligar Solicitações", "Turn on Requests"), L("Pedidos de amizade recebidos e enviados, quem te removeu e quem desistiu.", "Friend requests received and sent, who removed you and who gave up.")), after: (v) => { if (v) { safe(() => initFriends()); safe(() => initPendingReqs()); safe(() => initOutgoingReqs()); } syncDOM(); } } })),
+    h(Group, { footer: L("Tudo fica guardado só no seu computador. Dá pra rever cada opção depois em Ajustes.", "Everything stays on your computer only. You can review every option later in Settings.") },
+      h("button", { className: "dmtt-row dmtt-row-action", onClick: () => done({ type: "vip" }) }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Adicionar meu primeiro VIP", "Add my first VIP")))),
+      h("button", { className: "dmtt-row dmtt-row-action", onClick: () => done(null) }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Começar a usar", "Start using Lurk"))))));
+}
+function weekStats() {
+  const since = Date.now() - 7 * DAY;
+  const d = loadVip();
+  const vips = Object.keys(getVipList());
+  const top = (map, n = 3) => [...map.entries()].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, n);
+  const typed = new Map();
+  for (const r of getHistory()) { const n = attemptsOf(r).filter((a) => (a.lastTypingAt || a.startedAt) >= since).length; if (n) typed.set(r.userId, (typed.get(r.userId) || 0) + n); }
+  const online = new Map(vips.map((id) => [id, onlineMs(id, d.events, since)]));
+  const deleted = new Map();
+  const edited = new Map();
+  for (const m of d.messages) {
+    if (!isVip(m.userId)) continue;
+    if (m.deletedAt >= since) deleted.set(m.userId, (deleted.get(m.userId) || 0) + 1);
+    const ne = (m.edits || []).filter((e) => e.at >= since).length;
+    if (ne) edited.set(m.userId, (edited.get(m.userId) || 0) + ne);
+  }
+  const inCall = new Map();
+  for (const v of d.voice || []) if (isVip(v.userId) && v.leftAt >= since) inCall.set(v.userId, (inCall.get(v.userId) || 0) + (v.leftAt - Math.max(v.joinedAt, since)));
+  for (const [id, v] of vipVoice) inCall.set(id, (inCall.get(id) || 0) + (Date.now() - Math.max(v.joinedAt, since)));
+  const invisible = new Map();
+  for (const e of d.events) if (e.type === "invisible" && e.at >= since && isVip(e.userId)) invisible.set(e.userId, (invisible.get(e.userId) || 0) + 1);
+  const mentions = safe(() => loadMentions().events.filter((e) => (e.at || 0) >= since)) || [];
+  const reactRemoved = getVipReactions().filter((r) => r.removedAt >= since && isVip(r.userId)).length;
+  const sum = (map) => [...map.values()].reduce((a, b) => a + b, 0);
+  return {
+    typed: top(typed), typedTotal: sum(typed), online: top(online), deleted: top(deleted), deletedTotal: sum(deleted), editedTotal: sum(edited),
+    inCall: top(inCall), invisible: top(invisible), reactRemoved,
+    ghosts: mentions.filter((e) => e.type === "ghost").length, replies: mentions.filter((e) => e.type === "reply").length, keywords: mentions.filter((e) => e.type === "keyword").length,
+    reqCanceled: getCanceledReqs().filter((r) => (r.canceledAt || 0) >= since).length, reqDeclined: getDeclinedSent().filter((r) => (r.declinedAt || r.noticedAt || 0) >= since).length,
+    removedMe: getSettings().friendsEnabled ? getRemovedFriends().filter((r) => r.at >= since).length : 0,
+  };
+}
+function WeekScreen() {
+  useBus(vipBus, historyBus, mentionBus, reqBus);
+  const nav = useNav();
+  const w = weekStats();
+  const from = new Date(Date.now() - 7 * DAY).toLocaleDateString(dateLocale(), { day: "numeric", month: "long" });
+  const rank = (title, list, fmt, onOpen, empty) => h(Group, { header: title },
+    list.length ? list.map(([id, v], i) => h("button", { key: id, className: "dmtt-row", onClick: () => onOpen(id) },
+      h("span", { className: "dmtt-rank" }, i + 1),
+      h(Avatar, { userId: id, size: 30 }),
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, nameOf(id, getVipList()[id] || getHistory().find((r) => r.userId === id) || {}))),
+      h("span", { className: "dmtt-row-detail" }, fmt(v)),
+      h("span", { className: "dmtt-chev" }, h(Icon, { d: ICON_CHEVRON, size: 14 }))))
+      : h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-sub" }, empty)));
+  const vip = (id) => nav.push({ type: "vipPerson", userId: id });
+  const hasVips = Object.keys(getVipList()).length > 0;
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: NAMES.week(), subtitle: L(`De ${from} até hoje`, `From ${from} to today`) }),
+    h(Stats, { items: [[w.typedTotal, L("digitou e apagou", "typed & quit")], [w.deletedTotal, L("VIP apagadas", "VIP deleted")], [w.editedTotal, L("VIP editadas", "VIP edited")], [w.ghosts, "ghost pings"]] }),
+    rank(L("Quem mais digitou e apagou", "Most typed & quit"), w.typed, (v) => L(`${v}×`, `${v}×`), (id) => nav.push({ type: "person", userId: id }), L("Ninguém digitou e apagou nesta semana.", "No one typed & quit this week.")),
+    hasVips ? rank(L("VIPs com mais tempo online", "VIPs online the longest"), w.online, (v) => fmtDur(v), vip, L("Nenhum VIP ficou online nesta semana.", "No VIP was online this week.")) : null,
+    hasVips ? rank(L("VIPs com mais tempo em call", "VIPs in calls the longest"), w.inCall, (v) => fmtDur(v), vip, L("Nenhuma call de VIP nesta semana.", "No VIP calls this week.")) : null,
+    hasVips ? rank(L("VIPs que mais apagaram mensagens", "VIPs who deleted the most"), w.deleted, (v) => String(v), vip, L("Nenhuma mensagem VIP apagada nesta semana.", "No VIP messages deleted this week.")) : null,
+    hasVips && w.invisible.length ? rank(L("VIPs mais vistos invisíveis", "VIPs seen invisible the most"), w.invisible, (v) => L(`${v}×`, `${v}×`), vip, "") : null,
+    h(Group, { header: L("Outros números", "Other numbers") },
+      [[L("Respostas apagadas", "Deleted replies"), w.replies], [L("Palavras-chave", "Keywords"), w.keywords], [L("Reações retiradas por VIPs", "Reactions removed by VIPs"), w.reactRemoved], [L("Pedidos cancelados", "Canceled requests"), w.reqCanceled], [L("Pedidos recusados", "Declined requests"), w.reqDeclined], [L("Te removeram", "Removed you"), w.removedMe]]
+        .map(([label, v]) => h("div", { key: label, className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, label)), h("span", { className: "dmtt-row-detail" }, String(v))))));
+}
+function HomeSearch({ query, raw }) {
+  const nav = useNav();
+  const has = (...parts) => normalize(parts.filter(Boolean).join(" ")).includes(query);
+  const person = (id, x) => has(nameOf(id, x || {}), usernameOf(id), x?.username, id);
+  const groups = [];
+  const add = (title, rows, more) => { if (rows.length) groups.push({ title, rows: rows.slice(0, 4), total: rows.length, more }); };
+  const row = (key, userId, x, title, sub, onClick) => ({ key, userId, x, title, sub, onClick });
+  const list = getVipList();
+  add(NAMES.vip(), Object.keys(list).filter((id) => person(id, list[id])).map((id) => row(id, id, list[id], nameOf(id, list[id]), usernameOf(id) ? `@${usernameOf(id)}` : null, () => nav.push({ type: "vipPerson", userId: id }))), { type: "vip" });
+  const typedBy = new Map();
+  for (const r of getHistory()) if (person(r.userId, r)) typedBy.set(r.userId, (typedBy.get(r.userId) || 0) + attemptsOf(r).length);
+  add(NAMES.typing(), [...typedBy.entries()].map(([id, n]) => row(id, id, getHistory().find((r) => r.userId === id), nameOf(id, getHistory().find((r) => r.userId === id) || {}), attemptsText(n), () => nav.push({ type: "person", userId: id }))), { type: "typing" });
+  const msgs = loadVip().messages.filter((m) => isVip(m.userId) && msgHaystack(m).includes(query));
+  add(L("Mensagens dos VIPs", "VIP messages"), msgs.map((m) => row(m.id, m.userId, list[m.userId], nameOf(m.userId, list[m.userId] || {}), String((m.edits?.length ? m.edits[m.edits.length - 1].content : m.content) || "").slice(0, 80) || NO_TEXT(), () => nav.push({ type: "snipe", tab: "messages", _feedQ: raw }))), { type: "snipe", tab: "messages", _feedQ: raw });
+  const ments = (safe(() => loadMentions().events) || []).filter((e) => has(nameOf(e.userId, e), e.username, e.content, e.keyword, e.guildName, e.channelName));
+  add(NAMES.mentions(), ments.map((e) => row(e.id, e.userId, e, nameOf(e.userId, e), String(e.content || e.keyword || "").slice(0, 80) || placeLabel(e), () => nav.push({ type: "mentions", _q: raw }))), { type: "mentions", _q: raw });
+  const gave = [...getFirstContacts().map((e) => ({ ...e, seg: "first", t: L("Digitou pela 1ª vez", "First-time typer") })), ...getCanceledReqs().map((e) => ({ ...e, seg: "requests", t: L("Cancelou o pedido", "Canceled their request") })), ...getDeclinedSent().map((e) => ({ ...e, seg: "declined", t: L("Recusou seu pedido", "Declined your request") }))].filter((e) => person(e.userId, e));
+  add(NAMES.contacts(), gave.map((e, i) => row(`${e.userId}${e.seg}${i}`, e.userId, e, nameOf(e.userId, e), e.t, () => nav.push({ type: "contacts", seg: e.seg }))), null);
+  const calls = callTotals().filter((t) => has(t.name, t.username, nameOf(t.id)));
+  add(NAMES.calls(), calls.map((t) => row(t.id, t.id, t, t.name || nameOf(t.id), L(`${fmtDur(t.ms)} em call com você`, `${fmtDur(t.ms)} in calls with you`), () => nav.push({ type: "callPerson", userId: t.id }))), { type: "calls" });
+  if (getSettings().friendsEnabled) {
+    const reqs = [...friendRequests().map((r) => ({ r, tab: "requests", t: L("Pedido recebido", "Request received") })), ...sentRequests().map((r) => ({ r, tab: "sent", t: L("Pedido enviado", "Request sent") }))].filter(({ r }) => has(r.name, r.username));
+    add(NAMES.friends(), reqs.map(({ r, tab, t }) => row(`${r.id}${tab}`, r.id, r, r.name, t, () => nav.push({ type: "friends", tab, _q: raw }))), null);
+  }
+  if (!groups.length) return h(Empty, { icon: "search", title: L("Nada encontrado", "Nothing found") }, L(`Nenhuma pessoa ou texto com "${raw}" no Lurk.`, `No person or text matching "${raw}" in Lurk.`));
+  return h(React.Fragment, null, groups.map((g) => h(Group, { key: g.title, header: `${g.title} · ${g.total}` },
+    g.rows.map((r) => h("button", { key: r.key, className: "dmtt-row", onClick: r.onClick },
+      h(Avatar, { userId: r.userId, url: r.x?.avatarURL, size: 30 }),
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, r.title), r.sub ? h("span", { className: "dmtt-row-sub" }, r.sub) : null),
+      h("span", { className: "dmtt-chev" }, h(Icon, { d: ICON_CHEVRON, size: 14 })))),
+    g.total > g.rows.length && g.more ? h("button", { className: "dmtt-row dmtt-row-action", onClick: () => nav.push(g.more) }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L(`Ver todos (${g.total})`, `See all (${g.total})`)))) : null)));
+}
 function HomeScreen() {
   useBus(historyBus, vipBus, mentionBus, reqBus, callBus, snipeBus, seenBus, profileBus);
   useTicker(60000);
   const nav = useNav();
+  const [q, setQ] = useNavState("homeQ", "");
+  const query = normalize(q.trim());
   const c = counts();
   const top = callTotals()[0];
   const tiles = [
@@ -4370,6 +4496,8 @@ function HomeScreen() {
   ];
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.home(), subtitle: new Date().toLocaleDateString(dateLocale(), { weekday: "long", day: "numeric", month: "long" }) }),
+    h(Search, { value: q, onChange: setQ, placeholder: L("Buscar pessoa ou texto em todo o Lurk", "Search a person or text across Lurk") }),
+    query ? h(HomeSearch, { query, raw: q.trim() }) : h(React.Fragment, null,
     h("div", { className: "dmtt-tiles" }, tiles.map(([v, l, color, to]) => h("button", { key: l, className: "dmtt-tile-card", onClick: () => nav.push(to) },
       h("span", { className: "dmtt-tile-dot", style: { background: color } }),
       h("b", null, v), h("span", null, l)))),
@@ -4382,8 +4510,9 @@ function HomeScreen() {
       h(NavRow, { icon: "star", color: "#ffcc00", title: NAMES.vip(), subtitle: c.vips ? L(`${c.vipOnline} de ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} em call` : ""}`, `${c.vipOnline} of ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} in a call` : ""}`) : L("Acompanhe pessoas específicas", "Keep an eye on specific people"), onClick: () => nav.push({ type: "vip" }) }),
       h(NavRow, { icon: "headset", color: "#bf5af2", title: NAMES.calls(), subtitle: myCall.sess ? L(`Em call agora · ${placeLabel(myCall.sess)}`, `In a call now · ${placeLabel(myCall.sess)}`) : top ? L(`Mais tempo com ${top.name} (${fmtDur(top.ms)})`, `Most time with ${top.name} (${fmtDur(top.ms)})`) : L("Com quem você mais fica em call", "Who you spend the most time with in calls"), onClick: () => nav.push({ type: "calls" }) })),
     h(Group, null,
+      h(NavRow, { icon: "routine", color: "#5e5ce6", title: NAMES.week(), subtitle: L("O que aconteceu nos últimos 7 dias", "What happened in the last 7 days"), onClick: () => nav.push({ type: "week" }) }),
       h(NavRow, { icon: "gear", color: "#8e8e93", title: NAMES.settings(), onClick: () => nav.push({ type: "settings" }) })),
-    h("div", { className: "dmtt-version" }, `Lurk ${VERSION}`));
+    h("div", { className: "dmtt-version" }, `Lurk ${VERSION}`)));
 }
 
 const attemptsText = (n) => L(`${n} ${plural(n, "tentativa", "tentativas")}`, `${n} ${plural(n, "attempt", "attempts")}`);
@@ -6890,6 +7019,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-stat + .dmtt-stat { border-left: 1px solid var(--c-sep); }
 .dmtt-stat b { font-size: 18px; font-weight: 700; color: var(--c-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dmtt-stat span { font-size: 11px; color: var(--c-muted); }
+.dmtt-welcome-row .dmtt-row-sub { -webkit-line-clamp: 4; }
 .dmtt-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .dmtt-tile-card { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 14px; border: none; border-radius: 14px; background: var(--c-fill); color: inherit; text-align: left; cursor: pointer; transition: background .12s, transform .12s; min-width: 0; }
 .dmtt-tile-card:hover { background: var(--c-hover); }
