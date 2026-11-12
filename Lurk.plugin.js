@@ -53,6 +53,8 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.16.0", items: [
+    ["new", "Ajustes › Saúde do Lurk: mostra o que está funcionando e o que parou depois de uma atualização do Discord, com os últimos sinais recebidos. Se algo parar, o Lurk avisa uma vez.", "Settings › Lurk health: shows what's working and what stopped after a Discord update, with the last signals received. If something breaks, Lurk tells you once."],
+    ["new", "Ajustes › Modo foco › Horário de silêncio: escolha um horário em que o Lurk não manda avisos, como de madrugada. Vem desligado e tudo continua sendo registrado.", "Settings › Focus mode › Quiet hours: pick hours when Lurk sends no alerts, like overnight. It's off by default and everything is still logged."],
     ["new", "Solicitações › Enviados: os pedidos de amizade que você mandou e ainda estão sem resposta, com há quanto tempo foi enviado, idade da conta, amigos e servidores em comum, e botões pra cancelar o pedido ou ver o perfil.", "Requests › Sent: the friend requests you sent that are still unanswered, with how long ago you sent them, account age, mutual friends and servers, and buttons to cancel the request or view the profile."],
     ["new", "Desistiram › Pedidos recusados: quando alguém recusa um pedido que você mandou, ele vai pra cá, com quando você pediu e depois de quanto tempo a pessoa recusou. O aviso segue o mesmo ajuste dos pedidos cancelados.", "Gave up › Declined requests: when someone declines a request you sent, it lands here, with when you sent it and how long until they declined. The alert follows the same setting as canceled requests."],
   ] },
@@ -371,6 +373,9 @@ const DEFAULTS = {
   keywordSound: false,
 
   focusMode: false,
+  quietEnabled: false,
+  quietFrom: "23:00",
+  quietTo: "08:00",
   focusOnDnd: true,
   focusWhilePlaying: true,
 
@@ -1617,8 +1622,21 @@ function focusActive() {
   if (s.focusWhilePlaying && isPlaying()) return true;
   return false;
 }
+function quietActive() {
+  const s = getSettings();
+  if (!s.quietEnabled) return false;
+  const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || "")); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const from = toMin(s.quietFrom), to = toMin(s.quietTo);
+  if (from == null || to == null || from === to) return false;
+  const d = new Date();
+  const now = d.getHours() * 60 + d.getMinutes();
+  return from < to ? now >= from && now < to : now >= from || now < to;
+}
+const health = { last: {}, early: false, menus: 0 };
+const patchMenu = (id, fn) => { const undo = ContextMenu.patch(id, fn); health.menus++; return undo; };
+const healthMark = (key) => { health.last[key] = Date.now(); };
 function notify({ title, text, icon, onClick, toast: toastOn, desktop, sound }) {
-  if (!(toastOn || desktop || sound) || focusActive() || discreetActive()) return;
+  if (!(toastOn || desktop || sound) || focusActive() || quietActive() || discreetActive()) return;
   if (toastOn) toast(text, { type: "info", timeout: 6000 });
   if (desktop) {
     try {
@@ -1758,6 +1776,7 @@ function checkInvisible(userId, via, where) {
 }
 
 function onTypingStart(action) {
+  healthMark("typing");
   try {
     const { channelId, userId } = action || {};
     if (!channelId || !userId || userId === myId()) return;
@@ -1820,6 +1839,7 @@ function onSessionStart(sess, info) {
 }
 
 function onMessageCreate(action) {
+  healthMark("message");
   try {
     const msg = action?.message;
     if (!msg?.author?.id || action.optimistic) return;
@@ -1935,7 +1955,7 @@ function onEarlyDispatch(a) {
 }
 function patchEarlyDispatch() {
   if (typeof Dispatcher?.dispatch !== "function") return;
-  try { Patcher.before(Dispatcher, "dispatch", (_, args) => { try { onEarlyDispatch(args[0]); } catch {} }); } catch (e) { Logger.error("dispatch patch", e); }
+  try { Patcher.before(Dispatcher, "dispatch", (_, args) => { try { onEarlyDispatch(args[0]); } catch {} }); health.early = true; } catch (e) { Logger.error("dispatch patch", e); }
 }
 
 const mentionCache = new Map();
@@ -2233,6 +2253,7 @@ function mergedVS(raw) {
   return n;
 }
 function onVoiceStates(action) {
+  healthMark("voice");
   if (!diag.voiceSample && action?.voiceStates?.[0]) { diag.voiceSample = Object.keys(action.voiceStates[0]); saveDiag(); }
   const list = action?.voiceStates || [];
   setTimeout(() => { processVoiceStates(list); safe(() => processMyCall(list)); }, 0);
@@ -2548,6 +2569,7 @@ function initPresenceCache() {
   safe(() => initSeen());
 }
 function onPresenceChange() {
+  healthMark("presence");
   let seenChanged = false;
   try {
     const list = getVipList();
@@ -5975,9 +5997,11 @@ function settingsPages() {
           items: [{ ...sw("discreet", L("Modo discreto", "Discreet mode")), after: () => syncDOM() }] },
         { title: L("Automático", "Automatic"), items: [{ ...sw("discreetAuto", L("Ligar ao transmitir a tela", "Turn on while sharing my screen"), L("Liga sozinho enquanto você transmite a tela numa call e desliga quando você pra.", "Turns on while you're sharing your screen in a call and off when you stop.")), after: () => { safe(() => checkMyStream()); syncDOM(); } }] },
       ], custom: () => h(ShortcutRow) },
-    { id: "focus", title: L("Modo foco", "Focus mode"), icon: "moon", color: "#5856d6", summary: () => (getSettings().focusMode ? L("Ligado", "On") : L("Desligado", "Off")),
+    { id: "focus", title: L("Modo foco", "Focus mode"), icon: "moon", color: "#5856d6", summary: () => { const st = getSettings(); return [st.focusMode ? L("Ligado", "On") : null, st.quietEnabled ? `${st.quietFrom}–${st.quietTo}` : null].filter(Boolean).join(" · ") || L("Desligado", "Off"); },
       sections: [{ footer: L("Silencia os avisos do Lurk nessas situações. Tudo continua sendo registrado.", "Silences Lurk notifications in these situations. Everything is still logged."),
-        items: [sw("focusMode", L("Modo foco", "Focus mode")), sw("focusOnDnd", L("Quando eu estiver em Não perturbar", "When I'm on Do Not Disturb")), sw("focusWhilePlaying", L("Quando eu estiver jogando", "When I'm playing a game"))] }] },
+        items: [sw("focusMode", L("Modo foco", "Focus mode")), sw("focusOnDnd", L("Quando eu estiver em Não perturbar", "When I'm on Do Not Disturb")), sw("focusWhilePlaying", L("Quando eu estiver jogando", "When I'm playing a game"))] },
+      { title: L("Horário de silêncio", "Quiet hours"), footer: L("Nesse horário o Lurk não manda avisos, todos os dias. Tudo continua sendo registrado. Funciona mesmo com o Modo foco desligado.", "Lurk sends no alerts during these hours, every day. Everything is still logged. It works even with Focus mode off."),
+        items: [sw("quietEnabled", L("Horário de silêncio", "Quiet hours")), { id: "quietHours", type: "custom", render: () => h(QuietHoursRow) }] }] },
     { id: "privado", title: NAMES.typing(), icon: "keyboard", color: "#0a84ff",
       sections: [
         { title: L("Monitorar", "Track"), items: [
@@ -6049,6 +6073,7 @@ function settingsPages() {
         { ...sw("showBadge", L("Contador de novidades", "Unread badge")), after: () => updateBadge() },
         { ...sw("showSnipeButton", L("Botão de histórico (apagadas e editadas)", "History button (deleted & edited)")), after: () => syncDOM() },
         { id: "lurkIcon", label: L("Ícone do Lurk", "Lurk icon"), type: "select", options: [["ghost", L("Fantasminha", "Ghost")], ["ninja", L("Máscara ninja", "Ninja mask")], ["eye", L("Olho", "Eye")]], after: () => syncDOM() }] }] },
+    { id: "health", title: L("Saúde do Lurk", "Lurk health"), icon: "shield", color: "#30d158", summary: () => { const n = healthFailing().length; return n ? L(`${n} com problema`, `${n} with a problem`) : L("Tudo certo", "All good"); }, sections: [], custom: () => h(HealthList) },
     { id: "ignored", title: L("Ignorados", "Ignored"), icon: "ban", color: "#8e8e93", summary: () => { const ig = getIgnored(); const n = Object.keys(ig.users).length + Object.keys(ig.channels).length + Object.keys(ig.guilds).length; return n ? String(n) : L("Nenhum", "None"); }, sections: [], custom: () => h(IgnoredList) },
     { id: "friends", title: NAMES.friends(), icon: "personBell", color: "#34c759", summary: () => (getSettings().friendsEnabled ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [
@@ -6081,7 +6106,7 @@ function settingsPages() {
       sections: [{ items: [sw("backupEnabled", L("Backup automático", "Automatic backup")), num("backupDays", L("A cada", "Every"), 1, 60, 1, L("dias", "days")), num("backupKeep", L("Guardar", "Keep"), 1, 10, 1, L("cópias", "copies"))] }], custom: () => h(BackupSection) },
   ];
 }
-const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus", "discreet"], ["privado", "mentions", "friends", "vip", "historico", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
+const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus", "discreet"], ["privado", "mentions", "friends", "vip", "historico", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates", "health"]];
 
 function SettingsScreen() {
   useBus(settingsBus, vipBus, backupBus, historyBus);
@@ -6197,6 +6222,78 @@ function ignoredChannelInfo(id, x) {
   const voice = ch.type === 2 || ch.type === 13;
   const cat = ch.type === 4;
   return { label: voice || cat ? ch.name : `#${ch.name}`, sub: [voice ? L("Canal de voz", "Voice channel") : cat ? L("Categoria", "Category") : L("Canal", "Channel"), g].filter(Boolean).join(" · "), icon: voice ? "headset" : "hash" };
+}
+function healthChecks() {
+  const fn = (o, ...keys) => !!o && keys.every((key) => typeof o[key] === "function");
+  const s = getSettings();
+  return [
+    { id: "events", bad: true, ok: fn(Dispatcher, "subscribe"), label: L("Eventos do Discord", "Discord events"), detail: L("Digitou e apagou, mensagens, reações e calls", "Typed & quit, messages, reactions and calls") },
+    { id: "presence", bad: true, ok: fn(PresenceStore, "getStatus"), label: L("Status das pessoas", "People's status"), detail: L("Online, offline há… e visto invisível", "Online, offline for… and seen invisible") },
+    { id: "voice", bad: true, ok: fn(VoiceStateStore, "getVoiceStateForUser") && fn(VoiceStateStore, "getVoiceStatesForChannel"), label: "Calls", detail: L("Calls dos VIPs e Tempo em call", "VIP calls and Call time") },
+    { id: "relations", bad: true, ok: !!RelationshipStore && (fn(RelationshipStore, "getMutableRelationships") || fn(RelationshipStore, "getRelationships")), label: NAMES.friends(), detail: L("Pedidos de amizade e quem te removeu", "Friend requests and who removed you") },
+    { id: "early", ok: health.early, label: L("Apagadas e editadas", "Deleted and edited"), detail: L("Ver antes de outros plugins esconderem", "Seen before other plugins hide them") },
+    { id: "messages", ok: fn(MessageStore, "getMessage"), label: L("Ler mensagens", "Reading messages"), detail: L("Texto das mensagens reagidas, respondidas e apagadas", "Text of reacted, replied and deleted messages") },
+    { id: "rest", ok: !!RestAPI, label: L("Consultas ao Discord", "Discord lookups"), detail: L("Perfil, servidores em comum e monitorar perfil", "Profile, shared servers and watch profile") },
+    { id: "relActions", ok: !!RelationshipActions || !!RestAPI, label: L("Responder pedidos", "Answering requests"), detail: L("Aceitar, recusar e cancelar pedidos", "Accept, decline and cancel requests") },
+    { id: "profile", ok: !!UserProfileModal, label: L("Abrir perfil", "Opening profiles"), detail: L("Sem isso, o Lurk abre a conversa no lugar", "Without it, Lurk opens the DM instead") },
+    { id: "nav", ok: !!transitionTo, label: L("Ir pra mensagem", "Jumping to messages"), detail: L("Ir pra mensagem e abrir canal", "Jump to message and open channel") },
+    { id: "dm", ok: fn(PrivateChannelActions, "openPrivateChannel"), label: L("Abrir conversa", "Opening DMs"), detail: L("Botões de mensagem e cards clicáveis", "Message buttons and clickable cards") },
+    { id: "menus", ok: fn(ContextMenu, "patch") && health.menus >= 4, label: L("Menus do botão direito", "Right-click menus"), detail: L("Lista VIP, ignorar e atalhos nos menus", "VIP list, ignore and menu shortcuts") },
+    { id: "files", ok: !!safe(() => Files.exists(BdApi.Plugins.folder)), label: L("Arquivos", "Files"), detail: L("Fotos e vídeos salvos, mensagens antigas e backup", "Saved photos and videos, old messages and backup") },
+    { id: "net", ok: !!safe(() => typeof BdApi.Net?.fetch === "function"), label: L("Downloads", "Downloads"), detail: L("Salvar mídia e baixar atualizações", "Saving media and downloading updates") },
+    { id: "crypto", bad: true, ok: !!globalThis.crypto?.subtle, label: L("Atualizações", "Updates"), detail: L("Conferir e instalar versões novas", "Checking and installing new versions") },
+    ...(s.vipTrackServers ? [{ id: "gateway", ok: fn(GatewayModule, "getSocket"), label: L("Digitação nos servidores", "Typing in servers"), detail: L("Digitou e apagou nos servidores", "Typed & quit in servers") }] : []),
+    { id: "sound", ok: !!SoundUtils, label: L("Sons", "Sounds"), detail: L("Sons do Discord nos avisos", "Discord sounds in alerts") },
+  ];
+}
+const healthFailing = () => healthChecks().filter((c) => !c.ok);
+function healthWarn() {
+  const failing = healthFailing();
+  const sig = failing.length ? `${VERSION}:${failing.map((c) => c.id).join(",")}` : "";
+  if (sig === (Data.load("healthWarned") || "")) return;
+  Data.save("healthWarned", sig);
+  if (!failing.length || discreetActive()) return;
+  const n = failing.length;
+  let close = null;
+  close = safe(() => UI.showNotice(L(`O Lurk encontrou ${n} ${plural(n, "função que não está funcionando", "funções que não estão funcionando")} neste Discord.`, `Lurk found ${n} ${plural(n, "feature that isn't working", "features that aren't working")} on this Discord.`), { type: "warning", timeout: 0, buttons: [{ label: L("Ver detalhes", "See details"), onClick: () => { safe(() => close?.()); openApp([{ type: "home" }, { type: "settings" }, { type: "settingsPage", id: "health" }]); } }] }));
+}
+function HealthList() {
+  useTicker(15000);
+  const checks = healthChecks();
+  const failing = checks.filter((c) => !c.ok);
+  const signals = [["message", L("Mensagem", "Message")], ["typing", L("Digitação", "Typing")], ["presence", L("Mudança de status", "Status change")], ["voice", "Call"]];
+  const row = (c) => h("div", { key: c.id, className: "dmtt-row" },
+    h("span", { className: `dmtt-health-dot ${c.ok ? "is-ok" : c.bad ? "is-bad" : "is-warn"}`, "aria-hidden": "true" }),
+    h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, c.label), h("span", { className: "dmtt-row-sub" }, c.detail)),
+    h("span", { className: "dmtt-row-detail" }, c.ok ? L("Funcionando", "Working") : c.bad ? L("Parou", "Broken") : L("Indisponível", "Unavailable")));
+  const report = () => {
+    const text = [`Lurk ${VERSION}`, ...checks.map((c) => `${c.ok ? "OK " : c.bad ? "ERRO" : "FALTA"} ${c.id}`), ...signals.map(([key]) => `${key}: ${health.last[key] ? `${Math.round((Date.now() - health.last[key]) / 1000)}s` : "-"}`)].join("\n");
+    const ok = safe(() => { DiscordNative.clipboard.copy(text); return true; }) || safe(() => { navigator.clipboard.writeText(text); return true; });
+    toast(ok ? L("Diagnóstico copiado", "Diagnostics copied") : L("Não foi possível copiar", "Couldn't copy"), { type: ok ? "success" : "error" });
+  };
+  return h(React.Fragment, null,
+    h(Group, { footer: failing.length ? L("O que aparece como parado costuma voltar numa atualização do Lurk depois que o Discord muda alguma coisa.", "Things marked as broken usually come back in a Lurk update after Discord changes something.") : L("Tudo que o Lurk usa do Discord foi encontrado.", "Everything Lurk needs from Discord was found.") },
+      h("div", { className: "dmtt-row" },
+        h(IconTile, { name: "shield", color: failing.length ? (failing.some((c) => c.bad) ? "#ff453a" : "#ff9f0a") : "#30d158", size: 30 }),
+        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, failing.length ? L(`${failing.length} de ${checks.length} com problema`, `${failing.length} of ${checks.length} with a problem`) : L("Tudo funcionando", "Everything is working")), h("span", { className: "dmtt-row-sub" }, `Lurk ${VERSION}`)))),
+    failing.length ? h(Group, { header: L("Com problema", "With a problem") }, failing.map(row)) : null,
+    h(Group, { header: L("Funcionando", "Working") }, checks.filter((c) => c.ok).map(row)),
+    h(Group, { header: L("Últimos sinais recebidos", "Last signals received"), footer: L("Desde que o Lurk abriu. Se o Discord está em uso e nada chega há muito tempo, algo pode ter parado.", "Since Lurk started. If you're using Discord and nothing has arrived for a long time, something may have stopped.") },
+      signals.map(([key, label]) => h("div", { key, className: "dmtt-row" },
+        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, label)),
+        h("span", { className: "dmtt-row-detail" }, health.last[key] ? L(`há ${fmtDur(Date.now() - health.last[key])}`, `${fmtDur(Date.now() - health.last[key])} ago`) : L("Nenhum ainda", "None yet"))))),
+    h(Group, null, h("button", { className: "dmtt-row dmtt-row-action", onClick: report }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Copiar diagnóstico", "Copy diagnostics"))))));
+}
+function QuietHoursRow() {
+  useBus(settingsBus);
+  const s = getSettings();
+  if (!s.quietEnabled) return null;
+  const input = (key, label) => h("input", { className: "dmtt-text dmtt-time", type: "time", "aria-label": label, value: s[key] || "", onChange: (e) => setSetting(key, e.target.value || (key === "quietFrom" ? "23:00" : "08:00")) });
+  return h("div", { className: "dmtt-row" },
+    h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Das", "From")), quietActive() ? h("span", { className: "dmtt-row-sub" }, L("Em silêncio agora", "Quiet right now")) : null),
+    input("quietFrom", L("Início do silêncio", "Quiet start")),
+    h("span", { className: "dmtt-row-detail" }, L("às", "to")),
+    input("quietTo", L("Fim do silêncio", "Quiet end")));
 }
 function IgnoredList() {
   useBus(historyBus);
@@ -6509,6 +6606,10 @@ button.dmtt-row, .dmtt-back, .dmtt-nav-icon, .dmtt-link, .dmtt-more, .dmtt-actio
 button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,255,255,.08)); }
 .dmtt-row.is-danger .dmtt-row-title { color: var(--c-red); }
 .dmtt-row-action .dmtt-row-title { color: var(--c-link); }
+.dmtt-health-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c-muted); }
+.dmtt-health-dot.is-ok { background: #30d158; }
+.dmtt-health-dot.is-warn { background: #ff9f0a; }
+.dmtt-health-dot.is-bad { background: #ff453a; }
 .dmtt-row-col { flex-direction: column; align-items: stretch; gap: 6px; }
 .dmtt-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .dmtt-row-title { font-size: 14.5px; font-weight: 500; color: var(--c-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -6859,6 +6960,7 @@ const SUBS = {
 module.exports = class Lurk {
   start() {
     lurkAlive = true;
+    health.menus = 0;
     seenMapCache = null;
     settingsCache = null;
     historyCache = null;
@@ -6909,6 +7011,7 @@ module.exports = class Lurk {
     Scheduler.every("vipPurge", 3600000, () => purgeExpiredVips(), 60000);
     Scheduler.once("voiceMerge", 3000, () => { mergeSplitCalls(); mergeInvisibleCallEvents(); });
     Scheduler.every("voiceSync", 15000, () => syncVipVoice(), 8000);
+    Scheduler.once("health", 20000, () => healthWarn());
     Scheduler.every("alive", 5 * 60000, () => safe(() => Data.save(k("aliveAt"), Date.now())), 5 * 60000);
     freqCache = null;
     replyCache = null;
@@ -6939,7 +7042,7 @@ module.exports = class Lurk {
 
   patchContextMenus() {
     this.unpatchers = [];
-    this.unpatchers.push(ContextMenu.patch("user-context", (ret, props) => {
+    this.unpatchers.push(patchMenu("user-context", (ret, props) => {
       const id = props?.user?.id;
       if (!id || id === myId()) return;
       const attempts = getHistory().filter((r) => r.userId === id).reduce((n, r) => n + attemptsOf(r).length, 0);
@@ -6955,7 +7058,7 @@ module.exports = class Lurk {
         ContextMenu.buildItem({ type: "toggle", label: L("Ignorar no Lurk", "Ignore in Lurk"), checked: isIgnoredUser(id), action: () => toggleIgnore("users", id, props.user.username) }),
       ].filter(Boolean));
     }));
-    this.unpatchers.push(ContextMenu.patch("gdm-context", (ret, props) => {
+    this.unpatchers.push(patchMenu("gdm-context", (ret, props) => {
       const ch = props?.channel;
       if (!ch?.id) return;
       const n = getHistory().filter((r) => r.channelId === ch.id).length;
@@ -6967,7 +7070,7 @@ module.exports = class Lurk {
         ContextMenu.buildItem({ type: "toggle", label: L("Ignorar grupo no Lurk", "Ignore group in Lurk"), checked: isIgnoredChannel(ch.id), action: () => toggleIgnore("channels", ch.id, channelLabel(ch)) }),
       ].filter(Boolean));
     }));
-    this.unpatchers.push(ContextMenu.patch("channel-context", (ret, props) => {
+    this.unpatchers.push(patchMenu("channel-context", (ret, props) => {
       const ch = props?.channel;
       if (!ch?.id) return;
       const sn = snipeCountFor(ch.id);
@@ -6978,7 +7081,7 @@ module.exports = class Lurk {
         ContextMenu.buildItem({ type: "toggle", label, checked: isIgnoredChannel(ch.id), action: () => toggleIgnore("channels", ch.id, ch.name) }),
       ].filter(Boolean));
     }));
-    this.unpatchers.push(ContextMenu.patch("guild-context", (ret, props) => {
+    this.unpatchers.push(patchMenu("guild-context", (ret, props) => {
       const g = props?.guild;
       if (!g?.id) return;
       pushItems(ret, [
