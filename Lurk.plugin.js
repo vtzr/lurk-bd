@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.17.0", items: [
+    ["improved", "Companhias de call: a lista é guardada pelo ID da conta, então continua certa mesmo que a pessoa troque de nome ou @. Quando ela troca, os nomes e @ anteriores aparecem do lado, em \"Também\".", "Call companions: the list is keyed by account ID, so it stays correct even if the person changes their name or @. When they do, their previous names and @ show next to them under \"Also\"."],
     ["new", "Histórico VIP › Calls: uma aba nova com todas as calls dos VIPs juntas, a mais recente no topo e a que está rolando agora marcada ao vivo. Cada call nova acende o contador vermelho na aba e no ícone do Histórico VIP, igual às outras atividades.", "VIP history › Calls: a new tab with all your VIPs' calls together, newest on top and the ongoing one marked live. Each new call lights up the red counter on the tab and on the VIP history icon, just like the other activity."],
   ] },
   { version: "2.16.1", items: [
@@ -2236,15 +2237,17 @@ function callCompanions(vipId) {
     if (!p?.id || p.id === vipId) return;
     const from = Math.max(p.joinedAt || s.joinedAt, s.joinedAt);
     const to = Math.min(p.leftAt || end, end);
-    const c = map.get(p.id) || { id: p.id, name: p.name || null, username: p.username || null, avatarURL: p.avatarURL || null, calls: 0, ms: 0, lastAt: 0 };
+    const c = map.get(p.id) || { id: p.id, name: p.name || null, username: p.username || null, avatarURL: p.avatarURL || null, calls: 0, ms: 0, lastAt: 0, names: new Set(), usernames: new Set() };
     c.calls++; c.ms += Math.max(0, to - from); c.lastAt = Math.max(c.lastAt, at);
-    if (p.name) c.name = c.name || p.name;
+    if (p.name) { c.name = c.name || p.name; c.names.add(p.name); }
+    if (p.username) c.usernames.add(p.username);
+    if (p.avatarURL && !c.avatarURL) c.avatarURL = p.avatarURL;
     map.set(p.id, c);
   };
   for (const s of (loadVip().voice || [])) if (s.userId === vipId) for (const p of s.peers || []) add(p, s, s.leftAt, s.joinedAt);
   const live = vipVoice.get(vipId);
   if (live) for (const pid of live.peers) add({ id: pid, joinedAt: live.peerLog?.[pid]?.joinedAt, leftAt: live.peerLog?.[pid]?.leftAt }, live, Date.now(), Date.now());
-  return [...map.values()].sort((a, b) => b.calls - a.calls || b.ms - a.ms);
+  return [...map.values()].map((c) => ({ ...c, names: [...c.names], usernames: [...c.usernames] })).sort((a, b) => b.calls - a.calls || b.ms - a.ms);
 }
 function syncVipVoice() {
   if (!getSettings().vipTrackVoice || !VoiceStateStore) return;
@@ -5659,9 +5662,16 @@ function Companions({ id }) {
     shown.map((c, i) => h("div", { key: c.id, className: "dmtt-row" },
       h("span", { className: "dmtt-rank" }, i + 1),
       h(Avatar, { userId: c.id, url: c.avatarURL, size: 30 }),
-      h("span", { className: "dmtt-row-main" },
-        h("span", { className: "dmtt-row-title" }, nameOf(c.id, c), isVip(c.id) ? h("span", { style: { marginLeft: 6 } }, h(VipBadge, null)) : null),
-        h("span", { className: "dmtt-row-sub" }, joinNodes([`${c.calls} ${plural(c.calls, "call", "calls")}`, c.ms >= 60000 ? L(`${fmtDur(c.ms)} juntos`, `${fmtDur(c.ms)} together`) : null, L(`última ${relTime(c.lastAt)}`, `last ${relTime(c.lastAt)}`)].filter(Boolean)))),
+      (() => {
+        const curName = nameOf(c.id, c), curUser = usernameOf(c.id, c);
+        const otherNames = (c.names || []).filter((n) => n && n !== curName);
+        const otherUsers = (c.usernames || []).filter((u) => u && u !== curUser);
+        const aka = [...otherNames, ...otherUsers.map((u) => `@${u}`)];
+        return h("span", { className: "dmtt-row-main" },
+          h("span", { className: "dmtt-row-title" }, curName, curUser ? h("span", { className: "dmtt-row-user" }, ` @${curUser}`) : null, isVip(c.id) ? h("span", { style: { marginLeft: 6 } }, h(VipBadge, null)) : null),
+          h("span", { className: "dmtt-row-sub" }, joinNodes([`${c.calls} ${plural(c.calls, "call", "calls")}`, c.ms >= 60000 ? L(`${fmtDur(c.ms)} juntos`, `${fmtDur(c.ms)} together`) : null, L(`última ${relTime(c.lastAt)}`, `last ${relTime(c.lastAt)}`)].filter(Boolean))),
+          aka.length ? h("span", { className: "dmtt-row-sub dmtt-aka" }, L(`Também: ${aka.join(", ")}`, `Also: ${aka.join(", ")}`)) : null);
+      })(),
       h(ComboBell, { vipId: id, pid: c.id }),
       h(ProfileButton, { pid: c.id }))),
     list.length > 3 ? h("button", { className: "dmtt-row dmtt-row-action", onClick: () => setAll(!all) }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, all ? L("Mostrar menos", "Show less") : L(`Ver todas (${list.length})`, `See all (${list.length})`)))) : null);
@@ -6976,6 +6986,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-row-title { font-size: 14.5px; font-weight: 500; color: var(--c-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dmtt-row-user { font-weight: 400; font-size: 12.5px; color: var(--c-muted); }
 .dmtt-row-sub { font-size: 12.5px; color: var(--c-muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.dmtt-aka { margin-top: 2px; font-size: 11.5px; opacity: .8; }
 .dmtt-row-sub:has(.dmtt-meta-line) { display: block; -webkit-line-clamp: unset; }
 .dmtt-meta-line { display: block; }
 .dmtt-nowrap { white-space: nowrap; }
