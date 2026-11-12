@@ -54,6 +54,7 @@ const UPDATE_KEYS = [
 const CHANGELOG = [
   { version: "2.16.1", items: [
     ["fixed", "Calls dos VIPs: o estado de áudio no topo agora mostra como a pessoa ficou no fim da call, e não \"em algum momento\". Se ela entrou com o áudio desativado e depois reativou, isso aparece na linha de entrada, e mutar o microfone e desativar o áudio deixaram de virar dois registros no mesmo instante.", "VIP calls: the audio state at the top now shows how the person ended the call, not \"at any point\". If they joined deafened and then undeafened, that shows on the join line, and muting the mic and deafening no longer create two separate timeline entries at the same moment."],
+    ["improved", "Rotina: o tempo típico de resposta ficou mais preciso. Em vez de contar cada mensagem de uma conversa rápida, ele mede quanto cada um leva pra responder depois de um tempo parado.", "Routine: the typical reply time is more accurate. Instead of counting every message in a fast back-and-forth, it measures how long each of you takes to respond after a quiet gap."],
   ] },
   { version: "2.16.0", items: [
     ["new", "Busca geral: o campo no topo do Início procura uma pessoa ou um texto em todo o Lurk de uma vez (VIPs, Digitou e apagou, mensagens dos VIPs, Menções, Desistiram, calls e Solicitações).", "Global search: the field at the top of Home looks for a person or text across all of Lurk at once (VIPs, Typed & quit, VIP messages, Mentions, Gave up, calls and Requests)."],
@@ -3407,6 +3408,8 @@ function checkLongOnline() {
   }
 }
 const REPLY_MAX = 400;
+const REPLY_IDLE = 15 * 60000;
+const REPLY_CAP = 6 * 3600000;
 let replyCache = null;
 let replyTimer = null;
 const getReplies = () => (replyCache ??= Data.load(k("vipReplies")) || {});
@@ -3423,13 +3426,19 @@ function replyStats(list, now = Date.now()) {
   const arr = [...(list || [])].sort((a, b) => a[0] - b[0]);
   const since = now - 30 * DAY;
   const theirs = [], mine = [];
-  for (let i = 1; i < arr.length; i++) {
-    const [t, me] = arr[i];
-    const [pt, pme] = arr[i - 1];
-    if (me === pme || t < since) continue;
-    const gap = t - pt;
-    if (gap <= 0 || gap > 12 * 3600000) continue;
-    (me ? mine : theirs).push(gap);
+  let i = 0;
+  while (i < arr.length) {
+    const opening = i === 0 || arr[i][0] - arr[i - 1][0] >= REPLY_IDLE;
+    if (!opening) { i++; continue; }
+    const opener = arr[i][1], openAt = arr[i][0];
+    let j = i;
+    while (j + 1 < arr.length && arr[j + 1][1] === opener && arr[j + 1][0] - arr[j][0] < REPLY_IDLE) j++;
+    const next = arr[j + 1];
+    if (next && next[1] !== opener) {
+      const gap = next[0] - openAt;
+      if (openAt >= since && gap > 0 && gap <= REPLY_CAP) (next[1] ? mine : theirs).push(gap);
+    }
+    i = j + 1;
   }
   return { theirs: theirs.length >= 3 ? median(theirs) : null, mine: mine.length >= 3 ? median(mine) : null, nTheirs: theirs.length, nMine: mine.length };
 }
