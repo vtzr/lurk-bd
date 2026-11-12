@@ -53,6 +53,8 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.16.0", items: [
+    ["new", "Perfil do VIP › Calls › Companhias de call: ranking de com quem o VIP mais fica em call, com quantas calls, quanto tempo juntos e quando foi a última.", "VIP page › Calls › Call companions: a ranking of who the VIP is in calls with the most, with how many calls, how long together and when the last one was."],
+    ["new", "Aviso por combinação: o sino ao lado de cada pessoa da call avisa quando o VIP estiver em call com ela. Os avisos ligados aparecem em \"Avisar quando\".", "Combo alerts: the bell next to each person in a call alerts you when the VIP is in a call with them. Active alerts show up under \"Notify me when\"."],
     ["new", "Perfil do VIP › Dia: uma linha do tempo única com tudo que o VIP fez no dia, em ordem: status, calls, mensagens, edições, apagadas, reações, perfil e digitação. Dá pra voltar e avançar os dias. A aba Atividade agora se chama Status.", "VIP page › Day: a single timeline with everything the VIP did that day, in order: status, calls, messages, edits, deletes, reactions, profile and typing. You can go back and forward through days. The Activity tab is now called Status."],
     ["improved", "Perfil do VIP › Mensagens também mostra as reações, com um filtro \"Reações\".", "VIP page › Messages also shows reactions, with a \"Reactions\" filter."],
     ["new", "Ajustes › Saúde do Lurk: mostra o que está funcionando e o que parou depois de uma atualização do Discord, com os últimos sinais recebidos. Se algo parar, o Lurk avisa uma vez.", "Settings › Lurk health: shows what's working and what stopped after a Discord update, with the last signals received. If something breaks, Lurk tells you once."],
@@ -2190,6 +2192,47 @@ function openVoice(userId, vs, already) {
   vipBus.emit();
   return sess;
 }
+const comboSeen = new Set();
+const callWithOf = (uid) => getVipList()[uid]?.callWith || {};
+function toggleCallWith(uid, pid) {
+  const cur = { ...callWithOf(uid) };
+  if (cur[pid]) delete cur[pid]; else cur[pid] = { name: nameOf(pid), at: Date.now() };
+  setVip(uid, { callWith: cur });
+  if (cur[pid]) safe(() => checkCallCombos(uid));
+}
+function checkCallCombos(uid) {
+  const v = vipVoice.get(uid);
+  const cw = callWithOf(uid);
+  if (!v || !Object.keys(cw).length) return;
+  const here = new Set(usersInChannel(v.channelId));
+  const s = getSettings();
+  for (const pid of Object.keys(cw)) {
+    if (!here.has(pid)) continue;
+    const key = `${uid}:${v.joinedAt}:${pid}`;
+    if (comboSeen.has(key)) continue;
+    comboSeen.add(key);
+    notify({
+      title: L("Lista VIP", "VIP list"), text: L(`${nameOf(uid)} está em call com ${nameOf(pid, cw[pid])}: ${placeLabel(v)}`, `${nameOf(uid)} is in a call with ${nameOf(pid, cw[pid])}: ${placeLabel(v)}`),
+      icon: avatarOf(UserStore?.getUser?.(uid), uid), onClick: () => openVip(uid), toast: s.vipToast, desktop: s.vipDesktop, sound: s.vipSound,
+    });
+  }
+}
+function callCompanions(vipId) {
+  const map = new Map();
+  const add = (p, s, end, at) => {
+    if (!p?.id || p.id === vipId) return;
+    const from = Math.max(p.joinedAt || s.joinedAt, s.joinedAt);
+    const to = Math.min(p.leftAt || end, end);
+    const c = map.get(p.id) || { id: p.id, name: p.name || null, username: p.username || null, avatarURL: p.avatarURL || null, calls: 0, ms: 0, lastAt: 0 };
+    c.calls++; c.ms += Math.max(0, to - from); c.lastAt = Math.max(c.lastAt, at);
+    if (p.name) c.name = c.name || p.name;
+    map.set(p.id, c);
+  };
+  for (const s of (loadVip().voice || [])) if (s.userId === vipId) for (const p of s.peers || []) add(p, s, s.leftAt, s.joinedAt);
+  const live = vipVoice.get(vipId);
+  if (live) for (const pid of live.peers) add({ id: pid, joinedAt: live.peerLog?.[pid]?.joinedAt, leftAt: live.peerLog?.[pid]?.leftAt }, live, Date.now(), Date.now());
+  return [...map.values()].sort((a, b) => b.calls - a.calls || b.ms - a.ms);
+}
 function syncVipVoice() {
   if (!getSettings().vipTrackVoice || !VoiceStateStore) return;
   let changed = false;
@@ -2203,6 +2246,7 @@ function syncVipVoice() {
     changed = true;
   }
   if (changed) vipBus.emit();
+  for (const id of vipVoice.keys()) safe(() => checkCallCombos(id));
 }
 function closeVoice(userId, cut) {
   const v = vipVoice.get(userId);
@@ -5434,6 +5478,33 @@ function liveFlagsOf(userId) {
 }
 const withN = (n) => L(`com ${n}`, `with ${n}`);
 const alone = () => L("sozinho", "alone");
+function ComboBell({ vipId, pid }) {
+  const ref = React.useRef(null);
+  const on = !!callWithOf(vipId)[pid];
+  const label = on ? L(`Avisando quando ${nameOf(vipId)} estiver em call com ${nameOf(pid)}. Clique pra parar`, `Alerting when ${nameOf(vipId)} is in a call with ${nameOf(pid)}. Click to stop`) : L(`Avisar quando ${nameOf(vipId)} estiver em call com ${nameOf(pid)}`, `Alert me when ${nameOf(vipId)} is in a call with ${nameOf(pid)}`);
+  React.useEffect(() => {
+    let tip = null;
+    try { if (ref.current) tip = UI.createTooltip(ref.current, label, { side: "top" }); } catch {}
+    return () => { try { tip?.hide?.(); } catch {} };
+  }, [label]);
+  return h("button", { ref, className: `dmtt-vpeer-btn ${on ? "is-on" : ""}`, "aria-label": label, "aria-pressed": on, onClick: (ev) => { ev.stopPropagation(); toggleCallWith(vipId, pid); } }, h(SIcon, { d: SI.bell, size: 14 }));
+}
+function Companions({ id }) {
+  const [all, setAll] = React.useState(false);
+  const list = callCompanions(id);
+  if (!list.length) return null;
+  const shown = all ? list : list.slice(0, 3);
+  return h(Group, { header: L("Companhias de call", "Call companions"), footer: L("Com quem esse VIP mais fica em call, pelas calls que o Lurk tem guardadas. O sino avisa quando os dois estiverem juntos numa call.", "Who this VIP is in calls with the most, from the calls Lurk has saved. The bell alerts you when the two are in a call together.") },
+    shown.map((c, i) => h("div", { key: c.id, className: "dmtt-row" },
+      h("span", { className: "dmtt-rank" }, i + 1),
+      h(Avatar, { userId: c.id, url: c.avatarURL, size: 30 }),
+      h("span", { className: "dmtt-row-main" },
+        h("span", { className: "dmtt-row-title" }, nameOf(c.id, c), isVip(c.id) ? h("span", { style: { marginLeft: 6 } }, h(VipBadge, null)) : null),
+        h("span", { className: "dmtt-row-sub" }, joinNodes([`${c.calls} ${plural(c.calls, "call", "calls")}`, c.ms >= 60000 ? L(`${fmtDur(c.ms)} juntos`, `${fmtDur(c.ms)} together`) : null, L(`última ${relTime(c.lastAt)}`, `last ${relTime(c.lastAt)}`)].filter(Boolean)))),
+      h(ComboBell, { vipId: id, pid: c.id }),
+      h(ProfileButton, { pid: c.id }))),
+    list.length > 3 ? h("button", { className: "dmtt-row dmtt-row-action", onClick: () => setAll(!all) }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, all ? L("Mostrar menos", "Show less") : L(`Ver todas (${list.length})`, `See all (${list.length})`)))) : null);
+}
 function ProfileButton({ pid }) {
   const ref = React.useRef(null);
   const label = L(`Abrir o perfil de ${nameOf(pid)}`, `Open ${nameOf(pid)}'s profile`);
@@ -5520,6 +5591,7 @@ function VoiceDetail({ v, live, vipId }) {
           vipId ? h("span", { className: "dmtt-row-sub" }, companyLine(p.id)) : null),
         flags ? h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => flags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))) : null,
         isVip(p.id) ? h(VipBadge, null) : null,
+        vipId ? h(ComboBell, { vipId, pid: p.id }) : null,
         profileBtn(p.id));
     }) : h("div", { className: "dmtt-muted dmtt-small" }, live ? L("Está sozinho na call.", "Alone in the call.") : L("Ficou sozinho na call.", "Was alone in the call.")),
     h("div", { className: "dmtt-mini-h" }, L("Linha do tempo", "Timeline")),
@@ -5561,6 +5633,7 @@ function VoiceList({ id, sessions: list }) {
         h(PeerStack, { peers: livePeers }),
         h("span", { className: "dmtt-chev dmtt-chev-rot" }, h(Icon, { d: ICON_CHEVRON, size: 14 }))),
       liveOpen ? h(VoiceDetail, { v: live, live: true, vipId: id }) : null)) : null,
+    h(Companions, { id }),
     mine.length ? h("div", { className: "dmtt-sec-f dmtt-sec-f-top" }, L(`${mine.length} ${plural(mine.length, "call", "calls")} · ${fmtDur(total)} no total · toque numa call pra ver quem estava`, `${mine.length} ${plural(mine.length, "call", "calls")} · ${fmtDur(total)} total · tap a call to see who was there`)) : null,
     mine.length ? h(DayList, { items: mine, getTime: (v) => v.joinedAt, render: (v) => h(Flash, { key: `${v.joinedAt}-${v.channelId}`, isNew: (v.joinedAt || 0) > seenSnap(`vip:${id}:voice`) }, h(VoiceSessionRow, { v, vipId: id })) })
       : !live ? h(Empty, { icon: "headset", title: L("Nenhuma call ainda", "No calls yet") }) : null);
@@ -5593,6 +5666,9 @@ function VipAlerts({ id, toggles }) {
     open ? toggles.map(([f, l]) => h("div", { key: f, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => setFlag(f, !vipFlag(id, f)) },
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
       h(Switch, { checked: vipFlag(id, f), onChange: (v) => setFlag(f, v), label: l }))) : null,
+    open ? Object.entries(callWithOf(id)).map(([pid, x]) => h("div", { key: `cw${pid}`, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => toggleCallWith(id, pid) },
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L(`Estiver em call com ${nameOf(pid, x)}`, `They're in a call with ${nameOf(pid, x)}`))),
+      h(Switch, { checked: true, onChange: () => toggleCallWith(id, pid), label: L(`Em call com ${nameOf(pid, x)}`, `In a call with ${nameOf(pid, x)}`) }))) : null,
     open ? h("div", { key: "watch", className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => toggleWatch(!watching) },
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Monitorar perfil", "Watch profile")), h("span", { className: "dmtt-row-sub" }, L("Contas conectadas, bio, pronomes e banner. Uma pessoa por vez.", "Connected accounts, bio, pronouns and banner. One person at a time."))),
       h(Switch, { checked: watching, onChange: toggleWatch, label: L("Monitorar perfil", "Watch profile") })) : null);
@@ -6840,6 +6916,8 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-vpeer.is-self { margin: 0 -8px; padding: 6px 8px; border-radius: 10px; background: color-mix(in srgb, #ff9f0a 8%, transparent); }
 .dmtt-vpeer-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: var(--c-fill2); color: var(--c-link); cursor: pointer; transition: background-color .15s ease; }
 .dmtt-vpeer-btn:hover { background: var(--c-hover); }
+.dmtt-vpeer-btn.is-on { background: rgba(255, 159, 10, .2); color: #ff9f0a; }
+.dmtt-rank { flex: none; width: 14px; text-align: center; font-size: 12px; font-weight: 600; color: var(--c-muted); font-variant-numeric: tabular-nums; }
 .dmtt-vlimit { margin: -4px 0 4px; }
 .dmtt-vprev { color: #ff9f0a; }
 .dmtt-vt { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
