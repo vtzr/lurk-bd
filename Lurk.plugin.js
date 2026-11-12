@@ -53,6 +53,8 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.16.0", items: [
+    ["new", "Perfil do VIP › Dia: uma linha do tempo única com tudo que o VIP fez no dia, em ordem: status, calls, mensagens, edições, apagadas, reações, perfil e digitação. Dá pra voltar e avançar os dias. A aba Atividade agora se chama Status.", "VIP page › Day: a single timeline with everything the VIP did that day, in order: status, calls, messages, edits, deletes, reactions, profile and typing. You can go back and forward through days. The Activity tab is now called Status."],
+    ["improved", "Perfil do VIP › Mensagens também mostra as reações, com um filtro \"Reações\".", "VIP page › Messages also shows reactions, with a \"Reactions\" filter."],
     ["new", "Ajustes › Saúde do Lurk: mostra o que está funcionando e o que parou depois de uma atualização do Discord, com os últimos sinais recebidos. Se algo parar, o Lurk avisa uma vez.", "Settings › Lurk health: shows what's working and what stopped after a Discord update, with the last signals received. If something breaks, Lurk tells you once."],
     ["new", "Ajustes › Modo foco › Horário de silêncio: escolha um horário em que o Lurk não manda avisos, como de madrugada. Vem desligado e tudo continua sendo registrado.", "Settings › Focus mode › Quiet hours: pick hours when Lurk sends no alerts, like overnight. It's off by default and everything is still logged."],
     ["new", "Solicitações › Enviados: os pedidos de amizade que você mandou e ainda estão sem resposta, com há quanto tempo foi enviado, idade da conta, amigos e servidores em comum, e botões pra cancelar o pedido ou ver o perfil.", "Requests › Sent: the friend requests you sent that are still unanswered, with how long ago you sent them, account age, mutual friends and servers, and buttons to cancel the request or view the profile."],
@@ -5877,11 +5879,66 @@ function VipPresetApply() {
   });
   return h("button", { className: "dmtt-row dmtt-row-action", onClick: apply }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, label)));
 }
+function vipDayItems(id, dayStart) {
+  const end = dayStart + DAY;
+  const inDay = (t) => t >= dayStart && t < end;
+  const d = loadVip();
+  const out = [];
+  const snip = (t) => { const x = String(t || "").replace(/\s+/g, " ").trim(); return x.length > 90 ? `${x.slice(0, 90)}…` : x; };
+  const placeOfMsg = (m) => (m.guildId ? `#${m.channelName || L("canal", "channel")}` : m.channelName ? L(`grupo ${m.channelName}`, `group ${m.channelName}`) : L("privado", "DM"));
+  for (const e of d.events) {
+    if (e.userId !== id || !inDay(e.at)) continue;
+    if (e.type === "presence") out.push({ at: e.at, tone: e.to === "offline" ? "gray" : "green", title: PRESENCE_VERB[e.to] || e.to, sub: e.devices?.length ? fmtDevices(e.devices) : null });
+    else if (e.type === "invisible") out.push({ at: e.at, tone: "gray", title: L("Visto invisível", "Seen invisible"), sub: invisViaText(e, true) });
+  }
+  const calls = [...(d.voice || []).filter((v) => v.userId === id)];
+  const live = vipVoice.get(id);
+  for (const v of calls) if (inDay(v.joinedAt)) out.push({ at: v.joinedAt, tone: "purple", title: L(`Em call por ${fmtDur(v.leftAt - v.joinedAt)}`, `In a call for ${fmtDur(v.leftAt - v.joinedAt)}`), sub: [placeLabel(v), v.peers?.length ? withN(v.peers.length) : alone()].join(" · ") });
+  if (live && inDay(live.joinedAt)) out.push({ at: live.joinedAt, tone: "purple", title: L("Entrou em call e ainda está", "Joined a call and is still there"), sub: placeLabel(live) });
+  for (const m of d.messages) {
+    if (m.userId !== id) continue;
+    if (inDay(m.createdAt)) out.push({ at: m.createdAt, tone: "blue", title: L(`Mandou mensagem em ${placeOfMsg(m)}`, `Sent a message in ${placeOfMsg(m)}`), sub: snip(m.content) || (m.attachments?.length ? L("[anexo]", "[attachment]") : null) });
+    for (const ed of m.edits || []) if (inDay(ed.at)) out.push({ at: ed.at, tone: "orange", title: L(`Editou uma mensagem em ${placeOfMsg(m)}`, `Edited a message in ${placeOfMsg(m)}`), sub: snip(ed.content) });
+    if (m.deletedAt && inDay(m.deletedAt)) out.push({ at: m.deletedAt, tone: "red", title: L(`Apagou uma mensagem em ${placeOfMsg(m)}`, `Deleted a message in ${placeOfMsg(m)}`), sub: snip(m.edits?.length ? m.edits[m.edits.length - 1].content : m.content) });
+  }
+  for (const r of getVipReactions()) {
+    if (r.userId !== id) continue;
+    if (inDay(r.at)) out.push({ at: r.at, tone: "orange", emoji: r.emoji, title: L("Reagiu", "Reacted"), sub: [placeLabel(r), snip(r.snippet)].filter(Boolean).join(" · ") });
+    if (r.removedAt && inDay(r.removedAt)) out.push({ at: r.removedAt, tone: "red", emoji: r.emoji, title: L("Tirou a reação", "Removed the reaction"), sub: placeLabel(r) });
+  }
+  for (const e of getProfileLog()) {
+    if (e.userId !== id || !inDay(e.at)) continue;
+    const [what, detail] = profileChangeText(e);
+    out.push({ at: e.at, tone: "yellow", title: what.charAt(0).toUpperCase() + what.slice(1), sub: detail || e.guildName || null });
+  }
+  for (const r of getHistory()) {
+    if (r.userId !== id) continue;
+    for (const a of attemptsOf(r)) if (inDay(a.lastTypingAt || a.startedAt)) out.push({ at: a.lastTypingAt || a.startedAt, tone: "gray", title: L("Digitou e não enviou", "Typed and didn't send"), sub: null });
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
+function VipDay({ id }) {
+  useBus(vipBus, reactBus, profileBus, historyBus);
+  const [off, setOff] = useNavState("dayOff", 0);
+  const dayStart = startOfDay(Date.now()) - off * DAY;
+  const items = vipDayItems(id, dayStart);
+  const online = onlineMs(id, loadVip().events, dayStart);
+  return h(React.Fragment, null,
+    h("div", { className: "dmtt-daynav" },
+      h("button", { className: "dmtt-daybtn", "aria-label": L("Dia anterior", "Previous day"), onClick: () => setOff(off + 1) }, "‹"),
+      h("span", { className: "dmtt-daynav-label" }, dayLabel(dayStart + 1), h("span", { className: "dmtt-daynav-sub" }, items.length ? L(`${items.length} ${plural(items.length, "registro", "registros")}${off === 0 && online >= 60000 ? ` · ${fmtDur(online)} online` : ""}`, `${items.length} ${plural(items.length, "entry", "entries")}${off === 0 && online >= 60000 ? ` · ${fmtDur(online)} online` : ""}`) : L("Nada registrado", "Nothing logged"))),
+      h("button", { className: "dmtt-daybtn", "aria-label": L("Dia seguinte", "Next day"), disabled: off === 0, onClick: () => setOff(Math.max(0, off - 1)) }, "›")),
+    items.length ? h(Group, null, items.map((it, i) => h("div", { key: `${it.at}-${i}`, className: "dmtt-row dmtt-dayrow" },
+      h("span", { className: "dmtt-dayrow-time" }, fmtHM(it.at)),
+      it.emoji ? h("span", { className: "dmtt-dayrow-emoji" }, h(EmojiView, { e: it.emoji })) : h("span", { className: `dmtt-daydot is-${it.tone}`, "aria-hidden": "true" }),
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title dmtt-small" }, it.title), it.sub ? h("span", { className: "dmtt-row-sub" }, it.sub) : null))))
+      : h(Empty, { icon: "clock", title: off === 0 ? L("Nada hoje ainda", "Nothing today yet") : L("Nada nesse dia", "Nothing that day") }, L("Status, calls, mensagens, reações, perfil e digitação desse VIP aparecem aqui, tudo junto e em ordem.", "This VIP's status, calls, messages, reactions, profile and typing show up here, all together and in order.")));
+}
 function VipPersonScreen({ userId: id }) {
   useBus(vipBus, historyBus);
   useTicker(30000);
   const nav = useNav();
-  const [tab, setTab] = useNavState("tab", () => (vipVoice.has(id) ? "voice" : "activity"));
+  const [tab, setTab] = useNavState("tab", () => (vipVoice.has(id) ? "voice" : "day"));
   const d = loadVip();
   const entry = getVipList()[id];
   const vk = (t) => `vip:${id}:${t}`;
@@ -5911,8 +5968,9 @@ function VipPersonScreen({ userId: id }) {
       h(ActionButton, { icon: h(SIcon, { d: SI.trash, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmRemoveVip(id, () => nav.pop()) })),
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível hoje", "invisible today")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
-    h(Segmented, { value: tab, onChange: setTab, options: [topt("activity", L("Atividade", "Activity")), topt("messages", L("Mensagens", "Messages")), topt("voice", vipVoice.has(id) ? "Calls ●" : "Calls"), topt("profile", L("Perfil", "Profile")), ["typing", L("Digitou", "Typed")]] }),
-    tab === "profile" ? h(ProfileFeed, { userId: id })
+    h(Segmented, { value: tab, onChange: setTab, options: [["day", L("Dia", "Day")], topt("activity", L("Status", "Status")), topt("messages", L("Mensagens", "Messages")), topt("voice", vipVoice.has(id) ? "Calls ●" : "Calls"), topt("profile", L("Perfil", "Profile")), ["typing", L("Digitou", "Typed")]] }),
+    tab === "day" ? h(VipDay, { id })
+      : tab === "profile" ? h(ProfileFeed, { userId: id })
       : tab === "activity" ? h(ActivityList, { id, events: d.events })
       : tab === "messages" ? h(MessagesList, { id, messages: d.messages })
       : tab === "voice" ? h(VoiceList, { id, sessions: d.voice || [] })
@@ -6612,6 +6670,16 @@ button.dmtt-row, .dmtt-back, .dmtt-nav-icon, .dmtt-link, .dmtt-more, .dmtt-actio
 button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,255,255,.08)); }
 .dmtt-row.is-danger .dmtt-row-title { color: var(--c-red); }
 .dmtt-row-action .dmtt-row-title { color: var(--c-link); }
+.dmtt-daynav { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
+.dmtt-daynav-label { flex: 1; display: flex; flex-direction: column; align-items: center; font-size: 14px; font-weight: 600; color: var(--c-strong); }
+.dmtt-daynav-sub { font-size: 11.5px; font-weight: 400; color: var(--c-muted); }
+.dmtt-daybtn { width: 32px; height: 32px; border: none; border-radius: 50%; background: var(--c-fill); color: var(--c-link); font-size: 20px; line-height: 1; cursor: pointer; font-family: inherit; }
+.dmtt-daybtn:disabled { opacity: .35; cursor: default; }
+.dmtt-dayrow { align-items: flex-start; min-height: 36px; padding-top: 7px; padding-bottom: 7px; gap: 10px; }
+.dmtt-dayrow-time { flex: none; width: 38px; font-size: 11.5px; line-height: 18px; color: var(--c-muted); font-variant-numeric: tabular-nums; }
+.dmtt-dayrow-emoji { flex: none; width: 14px; display: inline-flex; justify-content: center; line-height: 18px; font-size: 13px; }
+.dmtt-daydot { flex: none; width: 8px; height: 8px; margin: 5px 3px 0; border-radius: 50%; background: var(--c-muted); }
+.dmtt-daydot.is-green { background: #30d158; } .dmtt-daydot.is-blue { background: #0a84ff; } .dmtt-daydot.is-red { background: #ff453a; } .dmtt-daydot.is-orange { background: #ff9f0a; } .dmtt-daydot.is-purple { background: #bf5af2; } .dmtt-daydot.is-yellow { background: #ffcc00; }
 .dmtt-health-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c-muted); }
 .dmtt-health-dot.is-ok { background: #30d158; }
 .dmtt-health-dot.is-warn { background: #ff9f0a; }
