@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.16.0";
+const VERSION = "2.16.1";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.16.1", items: [
+    ["fixed", "Calls dos VIPs: o estado de áudio no topo agora mostra como a pessoa ficou no fim da call, e não \"em algum momento\". Se ela entrou com o áudio desativado e depois reativou, isso aparece na linha de entrada, e mutar o microfone e desativar o áudio deixaram de virar dois registros no mesmo instante.", "VIP calls: the audio state at the top now shows how the person ended the call, not \"at any point\". If they joined deafened and then undeafened, that shows on the join line, and muting the mic and deafening no longer create two separate timeline entries at the same moment."],
+  ] },
   { version: "2.16.0", items: [
     ["new", "Busca geral: o campo no topo do Início procura uma pessoa ou um texto em todo o Lurk de uma vez (VIPs, Digitou e apagou, mensagens dos VIPs, Menções, Desistiram, calls e Solicitações).", "Global search: the field at the top of Home looks for a person or text across all of Lurk at once (VIPs, Typed & quit, VIP messages, Mentions, Gave up, calls and Requests)."],
     ["new", "Início › Resumo da semana: quem mais digitou e apagou, VIPs com mais tempo online e em call, quem mais apagou mensagens e os outros números dos últimos 7 dias. Só aparece quando você abre.", "Home › Week in review: who typed & quit the most, VIPs online and in calls the longest, who deleted the most and the other numbers from the last 7 days. It only shows when you open it."],
@@ -2192,6 +2195,7 @@ function openVoice(userId, vs, already) {
   };
   applyVoiceFlags(sess, vs);
   sess.events = [];
+  sess.initial = { muted: sess.now.muted, deafened: sess.now.deafened, streamed: sess.now.streamed, video: sess.now.video };
   vipVoice.set(userId, sess);
   vipBus.emit();
   return sess;
@@ -2257,6 +2261,7 @@ function closeVoice(userId, cut) {
   if (!v) return;
   vipVoice.delete(userId);
   const d = loadVip();
+  v.final = v.now ? { muted: !!v.now.muted, deafened: !!v.now.deafened, streamed: !!v.now.streamed, video: !!v.now.video } : null;
   delete v.now;
   const end = Date.now();
   const peers = [...v.peers].map((id) => {
@@ -2297,9 +2302,7 @@ function mergedVS(raw) {
   const n = normVS(raw);
   if (!n?.userId) return n;
   const st = normVS(safe(() => VoiceStateStore?.getVoiceStateForUser?.(n.userId)));
-  if (st && st.channelId === n.channelId) {
-    for (const f of ["mute", "deaf", "selfMute", "selfDeaf", "selfStream", "selfVideo"]) n[f] = n[f] || st[f];
-  }
+  if (st && (st.channelId || null) === (n.channelId || null)) return st;
   return n;
 }
 function onVoiceStates(action) {
@@ -5597,9 +5600,16 @@ const FLAG_EVENT = (flag, on) => ({
   video: on ? L("Ligou a câmera", "Turned camera on") : L("Desligou a câmera", "Turned camera off"),
 }[flag] || flag);
 function FlagIcon({ flag, size = 13 }) { return h("span", { className: `dmtt-device dmtt-flag-${flag}`, title: FLAG_TITLE[flag] }, h(SIcon, { d: FLAG_ICON[flag], size })); }
+function finalFlags(v) {
+  if (v.final) return v.final;
+  const base = v.initial ? { ...v.initial } : { muted: !!v.muted, deafened: !!v.deafened, streamed: !!v.streamed, video: !!v.video };
+  for (const e of (v.events || [])) if (e.flag in base) base[e.flag] = !!e.on;
+  return base;
+}
+const shownFlags = (fl) => Object.keys(FLAG_ICON).filter((f) => fl[f] && !(f === "muted" && fl.deafened));
 function VoiceFlags({ v, live }) {
-  const src = live && v.now ? v.now : v;
-  const on = Object.keys(FLAG_ICON).filter((f) => src[f]);
+  const src = live && v.now ? v.now : finalFlags(v);
+  const on = shownFlags(src);
   return on.length ? h("span", { className: "dmtt-devices" }, on.map((f) => h(FlagIcon, { key: f, flag: f }))) : null;
 }
 function liveFlagsOf(userId) {
@@ -5660,7 +5670,7 @@ function mergeSplitCalls(force) {
         peers.set(p.id, old ? { ...old, leftAt: p.leftAt || null, already: old.already } : { ...p, already: false });
       }
       Object.assign(newer, { joinedAt: s.joinedAt, already: !!s.already, peers: [...peers.values()], events: [...(s.events || []), ...(newer.events || [])],
-        muted: newer.muted || s.muted, deafened: newer.deafened || s.deafened, streamed: newer.streamed || s.streamed, video: newer.video || s.video, limit: newer.limit || s.limit || 0 });
+        muted: newer.muted || s.muted, deafened: newer.deafened || s.deafened, streamed: newer.streamed || s.streamed, video: newer.video || s.video, limit: newer.limit || s.limit || 0, initial: s.initial || newer.initial });
       merged++;
       continue;
     }
@@ -5677,14 +5687,17 @@ function VoiceDetail({ v, live, vipId }) {
         return { id: pid, name: nameOf(pid), username: u?.username, avatarURL: avatarOf(u, pid), joinedAt: log.joinedAt || v.joinedAt, leftAt: log.leftAt || null, already: !!log.already };
       })
     : (v.peers || []);
+  const rawEvents = v.events || [];
+  const evs = rawEvents.filter((e) => !(e.flag === "muted" && rawEvents.some((x) => x.flag === "deafened" && x.on === e.on && Math.abs(x.at - e.at) < 1000)));
+  const initOn = v.initial ? shownFlags(v.initial) : [];
   const timeline = [
-    { at: v.joinedAt, text: v.already ? L("Já estava na call quando o Lurk começou", "Was already in the call when Lurk started") : L("Entrou na call", "Joined the call") },
-    ...(v.events || []).map((e) => ({ at: e.at, flag: e.flag, on: e.on, text: FLAG_EVENT(e.flag, e.on) })),
+    { at: v.joinedAt, initFlags: initOn, text: v.already ? L("Já estava na call quando o Lurk começou", "Was already in the call when Lurk started") : L("Entrou na call", "Joined the call") },
+    ...evs.map((e) => ({ at: e.at, flag: e.flag, on: e.on, text: FLAG_EVENT(e.flag, e.on) })),
     ...(!live ? [{ at: v.leftAt, text: v.cut ? L("Fim do registro (Discord fechado)", "Recording ended (Discord closed)") : L("Saiu da call", "Left the call") }] : []),
   ].sort((a, b) => a.at - b.at);
   const profileBtn = (pid) => h(ProfileButton, { pid });
   const vipUser = vipId ? UserStore?.getUser?.(vipId) : null;
-  const vipFlags = live ? (liveFlagsOf(vipId) || v.now || {}) : v;
+  const vipFlags = live ? (liveFlagsOf(vipId) || v.now || {}) : finalFlags(v);
   const inNow = live ? usersInChannel(v.channelId).length : 0;
   const limit = Number(live ? safe(() => ChannelStore?.getChannel?.(v.channelId)?.userLimit) || v.limit : v.limit) || 0;
   const total = peers.length + (vipId ? 1 : 0);
@@ -5705,7 +5718,7 @@ function VoiceDetail({ v, live, vipId }) {
       h("span", { className: "dmtt-row-main" },
         h("span", { className: "dmtt-row-title dmtt-small" }, nameOf(vipId, getVipList()[vipId] || {}), vipUser?.username ? h("span", { className: "dmtt-row-user" }, ` @${vipUser.username}`) : null),
         h("span", { className: "dmtt-row-sub" }, joinNodes([v.already ? L("já estava", "already there") : L(`entrou ${fmtHM(v.joinedAt)}`, `joined ${fmtHM(v.joinedAt)}`), live ? L("na call", "in the call") : L(`saiu ${fmtHM(v.leftAt)}`, `left ${fmtHM(v.leftAt)}`)]))),
-      h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => vipFlags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))),
+      h("span", { className: "dmtt-devices" }, shownFlags(vipFlags).map((f) => h(FlagIcon, { key: f, flag: f }))),
       h(VipBadge, { watched: true }),
       profileBtn(vipId)) : null,
     peers.length ? peers.map((p) => {
@@ -5719,7 +5732,7 @@ function VoiceDetail({ v, live, vipId }) {
           h("span", { className: "dmtt-row-title dmtt-small" }, p.name || nameOf(p.id), p.username ? h("span", { className: "dmtt-row-user" }, ` @${p.username}`) : null),
           range ? h("span", { className: "dmtt-row-sub" }, range) : null,
           vipId ? h("span", { className: "dmtt-row-sub" }, companyLine(p.id)) : null),
-        flags ? h("span", { className: "dmtt-devices" }, Object.keys(FLAG_ICON).filter((f) => flags[f]).map((f) => h(FlagIcon, { key: f, flag: f }))) : null,
+        flags ? h("span", { className: "dmtt-devices" }, shownFlags(flags).map((f) => h(FlagIcon, { key: f, flag: f }))) : null,
         isVip(p.id) ? h(VipBadge, null) : null,
         vipId ? h(ComboBell, { vipId, pid: p.id }) : null,
         profileBtn(p.id));
@@ -5728,7 +5741,8 @@ function VoiceDetail({ v, live, vipId }) {
     timeline.map((t, i) => h("div", { key: i, className: "dmtt-vt" },
       h("span", { className: "dmtt-num dmtt-muted" }, fmtTime(t.at)),
       t.flag ? h(FlagIcon, { flag: t.flag }) : h("span", { className: "dmtt-vt-dot" }),
-      h("span", { className: t.flag && !t.on ? "dmtt-muted" : null }, t.text))),
+      h("span", { className: t.flag && !t.on ? "dmtt-muted" : null }, t.text),
+      t.initFlags && t.initFlags.length ? h("span", { className: "dmtt-devices", style: { marginLeft: 6 } }, t.initFlags.map((f) => h(FlagIcon, { key: f, flag: f }))) : null)),
     h("div", { className: "dmtt-vt-foot" },
       h("span", { className: "dmtt-muted" }, L(`${fmtDur(end - v.joinedAt)} no total`, `${fmtDur(end - v.joinedAt)} total`)),
       h("button", { className: "dmtt-link", onClick: () => jumpTo(v.guildId, v.channelId) }, L("Abrir canal", "Open channel"))));
@@ -6094,7 +6108,7 @@ function exportVip(id) {
     person: { id, name: nameOf(id, entry), username: usernameOf(id) || null, addedAt: iso(entry.addedAt) },
     status: d.events.filter((e) => e.userId === id).map((e) => ({ ...e, at: iso(e.at), until: e.until ? iso(e.until) : undefined, userId: undefined })),
     messages: d.messages.filter((m) => m.userId === id).map((m) => ({ id: m.id, server: m.guildName || null, channel: m.channelName || null, dm: !m.guildId, content: m.content, attachments: (m.attachments || []).map((a) => a.name || a.filename || a.url || null), sentAt: iso(m.createdAt), edits: (m.edits || []).map((x) => ({ at: iso(x.at), content: x.content })), deletedAt: iso(m.deletedAt) })),
-    calls: (d.voice || []).filter((v) => v.userId === id).map((v) => ({ server: v.guildName || null, channel: v.channelName || null, joinedAt: iso(v.joinedAt), leftAt: iso(v.leftAt), limit: v.limit || null, muted: !!v.muted, deafened: !!v.deafened, streamed: !!v.streamed, video: !!v.video, people: (v.peers || []).map((p) => ({ id: p.id, name: p.name || null, username: p.username || null, joinedAt: iso(p.joinedAt), leftAt: iso(p.leftAt) })), events: (v.events || []).map((x) => ({ at: iso(x.at), flag: x.flag, on: x.on })) })),
+    calls: (d.voice || []).filter((v) => v.userId === id).map((v) => ({ server: v.guildName || null, channel: v.channelName || null, joinedAt: iso(v.joinedAt), leftAt: iso(v.leftAt), limit: v.limit || null, muted: !!finalFlags(v).muted, deafened: !!finalFlags(v).deafened, streamed: !!finalFlags(v).streamed, video: !!finalFlags(v).video, people: (v.peers || []).map((p) => ({ id: p.id, name: p.name || null, username: p.username || null, joinedAt: iso(p.joinedAt), leftAt: iso(p.leftAt) })), events: (v.events || []).map((x) => ({ at: iso(x.at), flag: x.flag, on: x.on })) })),
     reactions: getVipReactions().filter((r) => r.userId === id).map((r) => ({ emoji: r.emoji?.name || null, server: r.guildName || null, channel: r.channelName || null, message: r.snippet || null, on: r.targetName || null, at: iso(r.at), removedAt: iso(r.removedAt) })),
     profileChanges: getProfileLog().filter((e) => e.userId === id).map((e) => ({ ...e, at: iso(e.at), userId: undefined })),
     typedAndQuit: getHistory().filter((r) => r.userId === id).flatMap((r) => attemptsOf(r).map((a) => ({ startedAt: iso(a.startedAt), stoppedAt: iso(a.lastTypingAt) }))),
