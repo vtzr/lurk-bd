@@ -1,6 +1,6 @@
 /**
  * @name Lurk
- * @author Vitor
+ * @author vtzr
  * @authorLink https://github.com/vtzr
  * @version 2.16.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
