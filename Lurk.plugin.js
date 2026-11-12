@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.16.0", items: [
+    ["new", "Perfil do VIP › Exportar histórico: salva num arquivo tudo que o Lurk tem daquela pessoa.", "VIP page › Export history: saves everything Lurk has on that person to a file."],
     ["new", "Perfil do VIP › Calls › Companhias de call: ranking de com quem o VIP mais fica em call, com quantas calls, quanto tempo juntos e quando foi a última.", "VIP page › Calls › Call companions: a ranking of who the VIP is in calls with the most, with how many calls, how long together and when the last one was."],
     ["new", "Aviso por combinação: o sino ao lado de cada pessoa da call avisa quando o VIP estiver em call com ela. Os avisos ligados aparecem em \"Avisar quando\".", "Combo alerts: the bell next to each person in a call alerts you when the VIP is in a call with them. Active alerts show up under \"Notify me when\"."],
     ["new", "Perfil do VIP › Dia: uma linha do tempo única com tudo que o VIP fez no dia, em ordem: status, calls, mensagens, edições, apagadas, reações, perfil e digitação. Dá pra voltar e avançar os dias. A aba Atividade agora se chama Status.", "VIP page › Day: a single timeline with everything the VIP did that day, in order: status, calls, messages, edits, deletes, reactions, profile and typing. You can go back and forward through days. The Activity tab is now called Status."],
@@ -5955,6 +5956,26 @@ function VipPresetApply() {
   });
   return h("button", { className: "dmtt-row dmtt-row-action", onClick: apply }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, label)));
 }
+function exportVip(id) {
+  const d = loadVip();
+  const entry = getVipList()[id] || {};
+  const iso = (t) => (t ? new Date(t).toISOString() : null);
+  const data = {
+    app: "Lurk", version: VERSION, exportedAt: iso(Date.now()),
+    person: { id, name: nameOf(id, entry), username: usernameOf(id) || null, addedAt: iso(entry.addedAt) },
+    status: d.events.filter((e) => e.userId === id).map((e) => ({ ...e, at: iso(e.at), until: e.until ? iso(e.until) : undefined, userId: undefined })),
+    messages: d.messages.filter((m) => m.userId === id).map((m) => ({ id: m.id, server: m.guildName || null, channel: m.channelName || null, dm: !m.guildId, content: m.content, attachments: (m.attachments || []).map((a) => a.name || a.filename || a.url || null), sentAt: iso(m.createdAt), edits: (m.edits || []).map((x) => ({ at: iso(x.at), content: x.content })), deletedAt: iso(m.deletedAt) })),
+    calls: (d.voice || []).filter((v) => v.userId === id).map((v) => ({ server: v.guildName || null, channel: v.channelName || null, joinedAt: iso(v.joinedAt), leftAt: iso(v.leftAt), limit: v.limit || null, muted: !!v.muted, deafened: !!v.deafened, streamed: !!v.streamed, video: !!v.video, people: (v.peers || []).map((p) => ({ id: p.id, name: p.name || null, username: p.username || null, joinedAt: iso(p.joinedAt), leftAt: iso(p.leftAt) })), events: (v.events || []).map((x) => ({ at: iso(x.at), flag: x.flag, on: x.on })) })),
+    reactions: getVipReactions().filter((r) => r.userId === id).map((r) => ({ emoji: r.emoji?.name || null, server: r.guildName || null, channel: r.channelName || null, message: r.snippet || null, on: r.targetName || null, at: iso(r.at), removedAt: iso(r.removedAt) })),
+    profileChanges: getProfileLog().filter((e) => e.userId === id).map((e) => ({ ...e, at: iso(e.at), userId: undefined })),
+    typedAndQuit: getHistory().filter((r) => r.userId === id).flatMap((r) => attemptsOf(r).map((a) => ({ startedAt: iso(a.startedAt), stoppedAt: iso(a.lastTypingAt) }))),
+    notes: (getNotes()[id] || []).map((n) => ({ ...n, at: iso(n.at) })),
+    dates: getDates()[id] || null,
+  };
+  const safeName = cleanName(nameOf(id, entry), 30) || id;
+  saveFile(`Lurk - ${safeName} - ${isoDay(Date.now())}.json`, JSON.stringify(data, null, 2), "application/json");
+  toast(L("Histórico exportado", "History exported"), { type: "success" });
+}
 function vipDayItems(id, dayStart) {
   const end = dayStart + DAY;
   const inDay = (t) => t >= dayStart && t < end;
@@ -6050,7 +6071,9 @@ function VipPersonScreen({ userId: id }) {
       : tab === "activity" ? h(ActivityList, { id, events: d.events })
       : tab === "messages" ? h(MessagesList, { id, messages: d.messages })
       : tab === "voice" ? h(VoiceList, { id, sessions: d.voice || [] })
-      : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }));
+      : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }),
+    h(Group, { footer: L("Salva num arquivo tudo que o Lurk tem dessa pessoa: status, mensagens, calls, reações, perfil, digitação, notas e datas. As fotos e vídeos ficam na pasta dela, na Galeria.", "Saves everything Lurk has on this person to a file: status, messages, calls, reactions, profile, typing, notes and dates. Photos and videos stay in their folder, in the Gallery.") },
+      h("button", { className: "dmtt-row dmtt-row-action", onClick: () => safe(() => exportVip(id)) }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Exportar histórico", "Export history"))))));
 }
 
 function CallsScreen() {
