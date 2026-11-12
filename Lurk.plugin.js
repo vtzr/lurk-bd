@@ -2,7 +2,7 @@
  * @name Lurk
  * @author vtzr
  * @authorLink https://github.com/vtzr
- * @version 2.16.1
+ * @version 2.17.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vtzr/lurk-bd
  * @source https://github.com/vtzr/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.16.1";
+const VERSION = "2.17.0";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.17.0", items: [
+    ["new", "Histórico VIP › Calls: uma aba nova com todas as calls dos VIPs juntas, a mais recente no topo e a que está rolando agora marcada ao vivo. Cada call nova acende o contador vermelho na aba e no ícone do Histórico VIP, igual às outras atividades.", "VIP history › Calls: a new tab with all your VIPs' calls together, newest on top and the ongoing one marked live. Each new call lights up the red counter on the tab and on the VIP history icon, just like the other activity."],
+  ] },
   { version: "2.16.1", items: [
     ["fixed", "Calls dos VIPs: o estado de áudio no topo agora mostra como a pessoa ficou no fim da call, e não \"em algum momento\". Se ela entrou com o áudio desativado e depois reativou, isso aparece na linha de entrada, e mutar o microfone e desativar o áudio deixaram de virar dois registros no mesmo instante.", "VIP calls: the audio state at the top now shows how the person ended the call, not \"at any point\". If they joined deafened and then undeafened, that shows on the join line, and muting the mic and deafening no longer create two separate timeline entries at the same moment."],
     ["improved", "Rotina: o tempo típico de resposta ficou mais preciso. Em vez de contar cada mensagem de uma conversa rápida, ele mede quanto cada um leva pra responder depois de um tempo parado.", "Routine: the typical reply time is more accurate. Instead of counting every message in a fast back-and-forth, it measures how long each of you takes to respond after a quiet gap."],
@@ -2199,6 +2202,7 @@ function openVoice(userId, vs, already) {
   sess.initial = { muted: sess.now.muted, deafened: sess.now.deafened, streamed: sess.now.streamed, video: sess.now.video };
   vipVoice.set(userId, sess);
   vipBus.emit();
+  safe(() => updateSnipeBadge());
   return sess;
 }
 const comboSeen = new Set();
@@ -3783,6 +3787,13 @@ const unseenDeclined = (seen) => getDeclinedSent().filter((r) => (r.declinedAt |
 const unseenGaveUp = (get) => unseenFirst(get("contacts:first")) + unseenReqs(get("contacts:requests")) + unseenDeclined(get("contacts:declined"));
 const unseenVipMsgs = (seen) => vipFeedItems().filter((m) => activityAt(m) > seen).length;
 const unseenStatus = (seen) => loadVip().events.filter((e) => (e.type === "presence" || e.type === "invisible") && isVip(e.userId) && e.at > seen).length;
+function vipVoiceSessions() {
+  const live = [...vipVoice.values()].filter((v) => isVip(v.userId)).map((v) => ({ v, live: true }));
+  const fin = (loadVip().voice || []).filter((v) => isVip(v.userId)).map((v) => ({ v, live: false }));
+  return [...live, ...fin];
+}
+const unseenVoice = (seen) => vipVoiceSessions().filter(({ v }) => (v.joinedAt || 0) > seen).length;
+const newVoiceCount = () => unseenVoice(seenOf("vipHist:calls"));
 const lastChangeAt = (m) => Math.max(m.deletedAt || 0, m.edits?.length ? m.edits[m.edits.length - 1].at : 0);
 const vipChanges = () => loadVip().messages.filter((m) => isVip(m.userId) && (m.deletedAt || m.edits?.length)).sort((a, b) => lastChangeAt(b) - lastChangeAt(a));
 const newChangesCount = () => unseenVipMsgs(seenOf("vipHist:messages"));
@@ -5127,13 +5138,14 @@ function SnipeTabs({ tab, setTab, channelId, vips }) {
     messages: { keys: ["vipHist:messages"], count: () => unseenVipMsgs(seenSnap("vipHist:messages")) },
     status: { keys: ["vipHist:status"], count: () => unseenStatus(seenSnap("vipHist:status")) },
     profile: { keys: ["vipHist:profile"], count: () => unseenProfile(seenSnap("vipHist:profile")) },
+    calls: { keys: ["vipHist:calls"], count: () => unseenVoice(seenSnap("vipHist:calls")) },
     people: { keys: [] },
   }, tab);
   const opt = (v, label, total) => { const n = tabCount(v); return [v, label, n || total || null, !!n]; };
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.snipe(), subtitle: L("Tudo o que seus VIPs fizeram, no privado e nos servidores", "Everything your VIPs did, in DMs and servers") }),
-    h(Segmented, { value: tab, onChange: setTab, options: [opt("messages", L("Mensagens", "Messages")), opt("status", "Status"), opt("profile", L("Perfil", "Profile")), ["people", L("Pessoas", "People"), vips.length]] }),
-    tab === "messages" ? h(MessagesFeed, { channelId }) : tab === "status" ? h(StatusFeed) : tab === "profile" ? h(ProfileFeed, null) : h(VipPeopleList));
+    h(Segmented, { value: tab, onChange: setTab, options: [opt("messages", L("Mensagens", "Messages")), opt("status", "Status"), opt("profile", L("Perfil", "Profile")), opt("calls", "Calls"), ["people", L("Pessoas", "People"), vips.length]] }),
+    tab === "messages" ? h(MessagesFeed, { channelId }) : tab === "status" ? h(StatusFeed) : tab === "profile" ? h(ProfileFeed, null) : tab === "calls" ? h(VoiceFeed) : h(VipPeopleList));
 }
 
 function onlineMs(id, events, from) {
@@ -5767,6 +5779,30 @@ function VoiceSessionRow({ v, vipId }) {
       h(PeerStack, { peers: v.peers }),
       h("span", { className: "dmtt-chev dmtt-chev-rot" }, h(Icon, { d: ICON_CHEVRON, size: 14 }))),
     open ? h(VoiceDetail, { v, vipId }) : null);
+}
+function VoiceFeed() {
+  useBus(vipBus, callBus, seenBus);
+  useTicker(30000);
+  const sessions = vipVoiceSessions().sort((a, b) => (b.v.joinedAt || 0) - (a.v.joinedAt || 0));
+  const seen = seenSnap("vipHist:calls");
+  if (!sessions.length) return h(Empty, { icon: "headset", title: getSettings().vipTrackVoice ? L("Nenhuma call ainda", "No calls yet") : L("Registro de calls desligado", "Call tracking is off") }, getSettings().vipTrackVoice ? L("Aparece aqui quando um VIP entrar numa call.", "Shows up here when a VIP joins a call.") : L("Ative em Ajustes › Lista VIP.", "Turn it on in Settings › VIP list."));
+  return h(DayList, { items: sessions, getTime: (x) => x.v.joinedAt, render: (x) => h(Flash, { key: `${x.v.userId}-${x.v.joinedAt}`, isNew: (x.v.joinedAt || 0) > seen }, h(VoiceFeedRow, { v: x.v, live: x.live })) });
+}
+function VoiceFeedRow({ v, live }) {
+  const [open, setOpen] = React.useState(false);
+  const list = getVipList();
+  const end = live ? Date.now() : v.leftAt;
+  const livePeers = live ? [...new Set([...v.peers, ...usersInChannel(v.channelId)])].filter((pid) => pid !== v.userId).map((pid) => ({ id: pid, name: nameOf(pid) })) : (v.peers || []);
+  return h("div", { className: `dmtt-cell ${open ? "is-open" : ""}` },
+    h("div", { className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => setOpen(!open) },
+      live ? h("span", { className: "dmtt-live-dot" }) : h("span", { className: "dmtt-tl-dot dmtt-dot-online" }),
+      h(Avatar, { userId: v.userId, size: 32 }),
+      h("span", { className: "dmtt-row-main" },
+        h("span", { className: "dmtt-row-title" }, nameOf(v.userId, list[v.userId] || {}), live ? h("span", { className: "dmtt-live-inline", style: { marginLeft: 6 } }, L("em call agora", "in a call now")) : null),
+        h("span", { className: "dmtt-row-sub" }, joinNodes([h("span", { className: "dmtt-num" }, live ? fmtHM(v.joinedAt) : `${fmtHM(v.joinedAt)} – ${fmtHM(v.leftAt)}`), `${(v.already || live) ? "≥ " : ""}${fmtDur(end - v.joinedAt)}`, placeLabel(v), livePeers.length ? withN(livePeers.length) : alone(), v.cut ? L("até o Discord fechar", "until Discord closed") : null]))),
+      h(PeerStack, { peers: livePeers }),
+      h("span", { className: "dmtt-chev dmtt-chev-rot" }, h(Icon, { d: ICON_CHEVRON, size: 14 }))),
+    open ? h(VoiceDetail, { v, live, vipId: v.userId }) : null);
 }
 function VoiceList({ id, sessions: list }) {
   useTicker(30000);
@@ -6710,7 +6746,7 @@ function updateBadge() {
 function updateSnipeBadge() {
   const badge = snipeBtn?.querySelector(".dmtt-toolbar-badge");
   if (!badge) return;
-  const n = getSettings().showBadge ? newChangesCount() + newProfileCount() : 0;
+  const n = getSettings().showBadge ? newChangesCount() + newProfileCount() + newVoiceCount() : 0;
   badge.hidden = !n;
   badge.textContent = n > 99 ? "99+" : String(n);
 }
