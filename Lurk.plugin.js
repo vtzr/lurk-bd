@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vtzr
- * @version 2.15.0
+ * @version 2.16.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vtzr/lurk-bd
  * @source https://github.com/vtzr/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.15.0";
+const VERSION = "2.16.0";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,10 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.16.0", items: [
+    ["new", "Solicitações › Enviados: os pedidos de amizade que você mandou e ainda estão sem resposta, com há quanto tempo foi enviado, idade da conta, amigos e servidores em comum, e botões pra cancelar o pedido ou ver o perfil.", "Requests › Sent: the friend requests you sent that are still unanswered, with how long ago you sent them, account age, mutual friends and servers, and buttons to cancel the request or view the profile."],
+    ["new", "Desistiram › Pedidos recusados: quando alguém recusa um pedido que você mandou, ele vai pra cá, com quando você pediu e depois de quanto tempo a pessoa recusou. O aviso segue o mesmo ajuste dos pedidos cancelados.", "Gave up › Declined requests: when someone declines a request you sent, it lands here, with when you sent it and how long until they declined. The alert follows the same setting as canceled requests."],
+  ] },
   { version: "2.15.0", items: [
     ["new", "Calls dos VIPs: a pessoa monitorada agora aparece no topo da lista de quem está na call, com foto, nome e se está mutada, sem áudio, transmitindo a tela ou com câmera. Cada pessoa tem um botão pra abrir o perfil, e quando o canal tem limite de pessoas aparece quantos lugares estão ocupados.", "VIP calls: the person you're watching now shows at the top of who's in the call, with their photo, name and whether they're muted, deafened, sharing their screen or on camera. Everyone has a button to open their profile, and when the channel has a user limit it shows how many spots are taken."],
     ["new", "Calls dos VIPs: cada pessoa da call mostra em quantas calls já esteve junto com o VIP e se também estava na última call dele.", "VIP calls: everyone in the call shows how many calls they've shared with the VIP and whether they were also in the VIP's last call."],
@@ -375,6 +379,7 @@ const DEFAULTS = {
   backupKeep: 3,
 
   friendReqTrack: true,
+  sentReqTrack: true,
   friendReqToast: false,
   friendReqDesktop: false,
   friendReqSound: false,
@@ -1277,6 +1282,10 @@ function enforceLimits() {
 const getPendingReqs = () => Data.load(k("reqPending")) || {};
 const savePendingReqs = (o) => Data.save(k("reqPending"), o);
 const getCanceledReqs = () => (Data.load(k("reqCanceled")) || []).filter((r) => r?.userId && r?.at);
+const getOutgoingReqs = () => Data.load(k("reqOutgoing")) || {};
+const saveOutgoingReqs = (o) => { Data.save(k("reqOutgoing"), o); safe(() => friendsBus.emit()); };
+const getDeclinedSent = () => (Data.load(k("reqDeclinedSent")) || []).filter((r) => r?.userId && r?.at);
+function saveDeclinedSent(list) { Data.save(k("reqDeclinedSent"), list.slice(0, 2000)); reqBus.emit(); updateBadge(); safe(() => updateFriendsBadge()); }
 function saveCanceledReqs(list) { Data.save(k("reqCanceled"), list.slice(0, 2000)); reqBus.emit(); updateBadge(); safe(() => updateFriendsBadge()); }
 
 const MENTION_FILE = "LurkMentions";
@@ -2565,6 +2574,7 @@ function onPresenceChange() {
 }
 
 const REL_PENDING_INCOMING = 3;
+const REL_PENDING_OUTGOING = 4;
 const REL_FRIEND = 1;
 const declinedByMe = new Map();
 
@@ -2610,8 +2620,55 @@ function initPendingReqs() {
   savePendingReqs(pending);
   if (changed) saveCanceledReqs(canceled);
 }
+const sentTracking = () => getSettings().friendsEnabled && getSettings().sentReqTrack;
+function initOutgoingReqs() {
+  if (!sentTracking()) return;
+  const rels = relEntries();
+  const typeOf = new Map(rels);
+  const out = getOutgoingReqs();
+  const current = new Set();
+  for (const [id, type] of rels) {
+    if (type !== REL_PENDING_OUTGOING) continue;
+    current.add(id);
+    if (!out[id]) out[id] = { ...snapshotUser(id), at: Date.parse(safe(() => RelationshipStore?.getSince?.(id)) || "") || Date.now() };
+  }
+  const declined = getDeclinedSent();
+  let changed = false;
+  for (const id of Object.keys(out)) {
+    if (current.has(id)) continue;
+    if (typeOf.get(id) !== REL_FRIEND && out[id]?.userId && out[id]?.at) { declined.unshift({ ...out[id], declinedAt: null, offline: true, noticedAt: Date.now() }); changed = true; }
+    delete out[id];
+  }
+  saveOutgoingReqs(out);
+  if (changed) saveDeclinedSent(declined);
+}
+function onOutgoingAdd(rel) {
+  if (!sentTracking() || !rel?.id) return;
+  const out = getOutgoingReqs();
+  if (rel.type === REL_PENDING_OUTGOING) { out[rel.id] = { ...snapshotUser(rel.id, rel.user), at: Date.parse(rel.since || "") || Date.now() }; saveOutgoingReqs(out); }
+  else if (out[rel.id]) { delete out[rel.id]; saveOutgoingReqs(out); }
+}
+function onOutgoingRemove(id) {
+  if (!sentTracking() || !id) return;
+  const out = getOutgoingReqs();
+  const req = out[id];
+  if (!req) return;
+  delete out[id];
+  saveOutgoingReqs(out);
+  const mine = declinedByMe.get(id);
+  if (mine && Date.now() - mine < 30000) return;
+  const entry = { ...req, ...snapshotUser(id), at: req.at, declinedAt: Date.now() };
+  saveDeclinedSent([entry, ...getDeclinedSent()]);
+  const s = getSettings();
+  notify({
+    title: L("Pedido de amizade recusado", "Friend request declined"),
+    text: L(`${nameOf(id, req)} recusou seu pedido de amizade${req.at ? ` depois de ${fmtDur(Date.now() - req.at)}` : ""}`, `${nameOf(id, req)} declined your friend request${req.at ? ` after ${fmtDur(Date.now() - req.at)}` : ""}`),
+    icon: entry.avatarURL, toast: s.friendReqToast, desktop: s.friendReqDesktop, sound: s.friendReqSound,
+  });
+}
 function onRelationshipAdd(action) {
   try {
+    safe(() => onOutgoingAdd(action?.relationship));
     if (!getSettings().friendReqTrack || !getSettings().friendsEnabled) return;
     const rel = action?.relationship;
     if (!rel?.id) return;
@@ -2627,6 +2684,7 @@ function onRelationshipAdd(action) {
 }
 function onRelationshipRemove(action) {
   try {
+    safe(() => onOutgoingRemove(action?.relationship?.id));
     if (!getSettings().friendReqTrack || !getSettings().friendsEnabled) return;
     const id = action?.relationship?.id;
     if (!id) return;
@@ -2679,7 +2737,7 @@ function pendingRequestIds() {
 function requestSentAt(id) {
   const since = Date.parse(safe(() => RelationshipStore?.getSince?.(id)) || "");
   if (since) return since;
-  const p = getPendingReqs()[id];
+  const p = getPendingReqs()[id] || getOutgoingReqs()[id];
   if (p?.at) return p.at;
   if (!reqFirstSeen.has(id)) reqFirstSeen.set(id, Date.now());
   return reqFirstSeen.get(id);
@@ -2815,7 +2873,7 @@ function pruneSpamSticky(pendingIds) {
 }
 function requestInfo(id) {
   const u = UserStore?.getUser?.(id);
-  const pend = getPendingReqs()[id] || {};
+  const pend = getPendingReqs()[id] || getOutgoingReqs()[id] || {};
   const cached = getProfileCache()[id];
   const liveGuilds = mutualGuildIds(id);
   const prof = cached ? { ...cached, mutualGuilds: [...new Set([...(cached.mutualGuilds || []), ...liveGuilds])] } : { mutualGuilds: liveGuilds, mutualFriends: null, friendNames: [], nitro: false, connections: 0, loaded: false };
@@ -2840,6 +2898,13 @@ function requestInfo(id) {
     hasAvatar: !!(u?.avatar ?? pend.avatarURL?.includes("/avatars/")),
   };
 }
+function outgoingRequestIds() {
+  return relEntries().filter(([, t]) => t === REL_PENDING_OUTGOING).map(([id]) => id);
+}
+function sentRequests() {
+  const ids = new Set([...outgoingRequestIds()]);
+  return [...ids].map(requestInfo).sort((a, b) => b.sentAt - a.sentAt);
+}
 function friendRequests() {
   return pendingRequestIds().map(requestInfo).sort((a, b) => b.sentAt - a.sentAt);
 }
@@ -2847,7 +2912,7 @@ function newFriendsCount() {
   if (!getSettings().friendsEnabled) return 0;
   const rs = getReqSeen(), ms = getRemovedSeen();
   return friendRequests().filter((r) => !r.spam && r.sentAt > rs).length + getRemovedFriends().filter((r) => r.at > ms).length
-    + (safe(() => unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests"))) || 0);
+    + (safe(() => unseenGaveUp(seenOf)) || 0);
 }
 function currentFriendIds() {
   return relEntries().filter(([, t]) => t === REL_FRIEND).map(([id]) => id);
@@ -3630,6 +3695,8 @@ const unseenMention = (type, seen) => (mentionData.owner ? mentionData.events : 
 const unseenMentionsAll = (get) => MENTION_TYPES.reduce((n, t) => n + unseenMention(t, get(`mention:${t}`)), 0);
 const unseenFirst = (seen) => getFirstContacts().filter((e) => e.at > seen).length;
 const unseenReqs = (seen) => getCanceledReqs().filter((r) => (r.canceledAt || 0) > seen).length;
+const unseenDeclined = (seen) => getDeclinedSent().filter((r) => (r.declinedAt || r.noticedAt || 0) > seen).length;
+const unseenGaveUp = (get) => unseenFirst(get("contacts:first")) + unseenReqs(get("contacts:requests")) + unseenDeclined(get("contacts:declined"));
 const unseenVipMsgs = (seen) => vipFeedItems().filter((m) => activityAt(m) > seen).length;
 const unseenStatus = (seen) => loadVip().events.filter((e) => (e.type === "presence" || e.type === "invisible") && isVip(e.userId) && e.at > seen).length;
 const lastChangeAt = (m) => Math.max(m.deletedAt || 0, m.edits?.length ? m.edits[m.edits.length - 1].at : 0);
@@ -4215,7 +4282,7 @@ function counts() {
     vipInCall: vips.filter((id) => vipVoice.has(id)).length,
     vipDeletedToday: loadVip().messages.filter((m) => m.deletedAt && m.deletedAt >= today).length,
     contacts: getFirstContacts().length + getCanceledReqs().length,
-    contactsNew: getSettings().friendsEnabled ? unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")) : 0,
+    contactsNew: getSettings().friendsEnabled ? unseenGaveUp(seenOf) : 0,
     changes: vipChanges().length,
     changesNew: newChangesCount() + newProfileCount(),
   };
@@ -4442,6 +4509,7 @@ function gaveUpHistory(userId) {
   return [
     ...getFirstContacts().filter((e) => e.userId === userId).map((e) => ({ at: e.at, kind: "typed" })),
     ...getCanceledReqs().filter((r) => r.userId === userId).map((r) => ({ at: r.canceledAt || r.at, kind: "canceled" })),
+    ...getDeclinedSent().filter((r) => r.userId === userId).map((r) => ({ at: r.declinedAt || r.noticedAt || r.at, kind: "declined" })),
   ].sort((a, b) => a.at - b.at);
 }
 const ordinalPT = (n) => `${n}ª`;
@@ -4460,7 +4528,22 @@ function GaveUpRepeat({ userId, at }) {
         L(`${ordinalPT(n)} vez`, `${ordinalEN(n)} time`), " ", h("span", { className: `dmtt-gu-chev${open ? " is-open" : ""}`, "aria-hidden": "true" }, "›"))),
     open ? h("span", { className: "dmtt-gu-list" }, others.map((x, i) => h("span", { key: i, className: "dmtt-gu-item" },
       h("span", { className: "dmtt-gu-when" }, when(x.at)),
-      h("span", null, x.kind === "typed" ? L("Digitou e não mandou", "Typed and didn't send") : L("Pediu e cancelou", "Sent a request and canceled"))))) : null);
+      h("span", null, x.kind === "typed" ? L("Digitou e não mandou", "Typed and didn't send") : x.kind === "declined" ? L("Recusou seu pedido", "Declined your request") : L("Pediu e cancelou", "Sent a request and canceled"))))) : null);
+}
+const sentWhen = (at) => (Date.now() - at < DAY ? L(`Você pediu às ${fmtHM(at)}`, `You sent it at ${fmtHM(at)}`) : L(`Você pediu em ${fmtDate(at).slice(0, 10)}, ${fmtHM(at)}`, `You sent it on ${fmtDate(at).slice(0, 10)}, ${fmtHM(at)}`));
+function DeclinedSentList({ list }) {
+  const same = (a, b) => a.userId === b.userId && a.at === b.at && (a.declinedAt || 0) === (b.declinedAt || 0);
+  if (!list.length) return h(Empty, { icon: "userX", title: L("Nenhum pedido recusado", "No declined requests") }, L("Quando alguém recusar um pedido de amizade que você mandou, aparece aqui.", "When someone declines a friend request you sent, it shows up here."));
+  return h(DayList, { items: list, getTime: (r) => r.declinedAt || r.noticedAt || r.at, render: (r, i) => h(Flash, { key: `${r.userId}-${r.at}-${i}`, isNew: (r.declinedAt || r.noticedAt || 0) > seenSnap("contacts:declined") },
+    h("div", { className: "dmtt-row dmtt-row-top dmtt-row-tap", role: "button", tabIndex: 0, title: UserProfileModal ? L("Ver perfil", "View profile") : L("Abrir conversa", "Open DM"), onClick: () => openProfile(r.userId), onKeyDown: (ev) => { if (ev.target === ev.currentTarget && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); openProfile(r.userId); } } },
+      h(Avatar, { userId: r.userId, url: r.avatarURL }),
+      h("span", { className: "dmtt-row-main" },
+        h("span", { className: "dmtt-row-title" }, nameOf(r.userId, r), r.username ? h("span", { className: "dmtt-row-user" }, ` @${r.username}`) : null),
+        h("span", { className: "dmtt-row-sub" }, sentWhen(r.at)),
+        h("span", { className: "dmtt-row-sub" }, r.declinedAt ? L(`Recusou após ${fmtDur(r.declinedAt - r.at)}`, `Declined after ${fmtDur(r.declinedAt - r.at)}`) : L("Saiu dos pendentes enquanto o Lurk estava fechado", "Left your pending list while Lurk was closed")),
+        h(GaveUpRepeat, { userId: r.userId, at: r.declinedAt || r.noticedAt || r.at })),
+      h("span", { className: "dmtt-row-time" }, relTime(r.declinedAt || r.noticedAt || r.at)),
+      h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: (ev) => { ev.stopPropagation(); saveDeclinedSent(getDeclinedSent().filter((x) => !same(x, r))); } }, h(Icon, { d: ICON_X, size: 12 })))) });
 }
 function ContactsScreen({ initial = "first" }) {
   useBus(reqBus);
@@ -4468,16 +4551,19 @@ function ContactsScreen({ initial = "first" }) {
   const tabCount = useTabSeen({
     first: { keys: ["contacts:first"], count: () => unseenFirst(seenSnap("contacts:first")) },
     requests: { keys: ["contacts:requests"], count: () => unseenReqs(seenSnap("contacts:requests")) },
+    declined: { keys: ["contacts:declined"], count: () => unseenDeclined(seenSnap("contacts:declined")) },
   }, seg);
+  const declined = getDeclinedSent();
   const first = getFirstContacts();
   const reqs = getCanceledReqs();
   const pendingCount = Object.keys(getPendingReqs()).length;
   const pendingText = L(`${pendingCount} ${plural(pendingCount, "pedido pendente", "pedidos pendentes")} agora.`, `${pendingCount} pending ${plural(pendingCount, "request", "requests")} right now.`);
   const sameReq = (a, b) => a.userId === b.userId && a.canceledAt === b.canceledAt && a.at === b.at;
   return h(React.Fragment, null,
-    h(LargeTitle, { title: NAMES.contacts(), subtitle: L("Quem nunca falou com você e digitou sem enviar, e quem cancelou o pedido de amizade", "People who never talked to you and typed without sending, and canceled friend requests") }),
-    h(Segmented, { value: seg, onChange: setSeg, options: [["first", L("Digitou pela 1ª vez", "First-time typers"), tabCount("first") || first.length, !!tabCount("first")], ["requests", L("Pedidos cancelados", "Canceled requests"), tabCount("requests") || reqs.length, !!tabCount("requests")]] }),
-    seg === "first"
+    h(LargeTitle, { title: NAMES.contacts(), subtitle: L("Quem digitou sem enviar, quem cancelou o pedido de amizade e quem recusou o seu", "People who typed without sending, canceled their friend request or declined yours") }),
+    h(Segmented, { value: seg, onChange: setSeg, options: [["first", L("Digitou pela 1ª vez", "First-time typers"), tabCount("first") || first.length, !!tabCount("first")], ["requests", L("Pedidos cancelados", "Canceled requests"), tabCount("requests") || reqs.length, !!tabCount("requests")], ["declined", L("Pedidos recusados", "Declined requests"), tabCount("declined") || declined.length, !!tabCount("declined")]] }),
+    seg === "declined" ? h(DeclinedSentList, { list: declined })
+    : seg === "first"
       ? (first.length ? h(DayList, { items: first, getTime: (e) => e.at, render: (e) => h(Flash, { key: `${e.userId}-${e.at}`, isNew: e.at > seenSnap("contacts:first") }, h("div", { className: "dmtt-row" },
           h(Avatar, { userId: e.userId, url: e.avatarURL }),
           h("span", { className: "dmtt-row-main" },
@@ -4501,8 +4587,8 @@ function ContactsScreen({ initial = "first" }) {
           h("span", { className: "dmtt-row-time" }, r.canceledAt ? relTime(r.canceledAt) : ""),
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: (ev) => { ev.stopPropagation(); saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))); } }, h(Icon, { d: ICON_X, size: 12 })))) })
         : h(Empty, { icon: "userX", title: L("Nenhum pedido cancelado", "No canceled requests") }, pendingText)),
-    (seg === "first" ? first.length : reqs.length) ? h(Group, { footer: seg === "requests" ? `${pendingText} ${L("Suas recusas não entram.", "Requests you declined aren't listed.")}` : null },
-      h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => (seg === "first" ? saveFirstContacts([]) : saveCanceledReqs([]))) })) : null);
+    (seg === "first" ? first.length : seg === "declined" ? declined.length : reqs.length) ? h(Group, { footer: seg === "requests" ? `${pendingText} ${L("Suas recusas não entram.", "Requests you declined aren't listed.")}` : seg === "declined" ? L("Pedidos que você mandou e a pessoa recusou. Os que você mesmo cancelou não entram.", "Requests you sent that the person declined. Ones you canceled yourself aren't listed.") : null },
+      h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => (seg === "first" ? saveFirstContacts([]) : seg === "declined" ? saveDeclinedSent([]) : saveCanceledReqs([]))) })) : null);
 }
 
 function fmtAge(ms) {
@@ -4587,7 +4673,22 @@ const FR_ICONS = {
 function FactChip({ icon, value, hover, muted }) {
   return h(HoverInfo, { content: hover, className: `dmtt-chip ${muted ? "is-muted" : ""}` }, h(SIcon, { d: icon, size: 13 }), h("span", null, value));
 }
-function RequestRow({ r, isNew, showSpamWhy }) {
+function SentActions({ r }) {
+  const [busy, setBusy] = React.useState(false);
+  const cancel = () => UI.showConfirmationModal(L(`Cancelar o pedido pra ${r.name}?`, `Cancel the request to ${r.name}?`), L("A pessoa deixa de ver o seu pedido. Você pode mandar outro depois.", "They'll no longer see your request. You can send another one later."), {
+    danger: true, confirmText: L("Cancelar pedido", "Cancel request"), cancelText: L("Voltar", "Go back"),
+    onConfirm: async () => {
+      setBusy(true);
+      try { await respondRequest(r.id, false); }
+      catch (e) { Logger.error("cancel request", e); toast(L("Não foi possível cancelar o pedido.", "Couldn't cancel the request."), { type: "error" }); }
+      setBusy(false);
+    },
+  });
+  return h("span", { className: "dmtt-fr-actions" },
+    h("button", { className: "dmtt-frbtn", disabled: busy, onClick: cancel }, busy ? L("Cancelando…", "Canceling…") : L("Cancelar pedido", "Cancel request")),
+    h("button", { className: "dmtt-frbtn is-plain", onClick: () => openProfile(r.id) }, UserProfileModal ? L("Ver perfil", "View profile") : L("Abrir conversa", "Open DM")));
+}
+function RequestRow({ r, isNew, showSpamWhy, outgoing }) {
   useTicker(30000);
   const flash = useFlash(isNew);
   const ref = React.useRef(null);
@@ -4618,12 +4719,14 @@ function RequestRow({ r, isNew, showSpamWhy }) {
           hover: pending ? L("Carregando amigos em comum…", "Loading mutual friends…") : h(HoverList, { title: L("Amigos em comum", "Mutual friends"), items: p.friendNames || [], empty: mf == null ? L("Não foi possível carregar", "Couldn't load") : L("Nenhum", "None") }) }),
         h(FactChip, { icon: FR_ICONS.servers, value: String(mg.length), muted: !mg.length,
           hover: h(HoverList, { title: L("Servidores em comum", "Mutual servers"), items: mg.map(guildName), empty: L("Nenhum", "None") }) })),
-      (r.bot || r.fresh || spamTag || r.declined) ? h("span", { className: "dmtt-fr-tags" },
+      outgoing ? h("span", { className: "dmtt-row-sub", style: { marginTop: 4 } }, L(`Aguardando resposta há ${fmtDur(Date.now() - r.sentAt)}`, `Waiting for a reply for ${fmtDur(Date.now() - r.sentAt)}`)) : null,
+      outgoing ? (() => { const n = getDeclinedSent().filter((x) => x.userId === r.id && x.declinedAt).length; return n || r.fresh ? h("span", { className: "dmtt-fr-tags" }, n ? h("span", { className: "dmtt-tag is-purple" }, L(`Já recusou você ${n}×`, `Declined you ${n}× before`)) : null, r.fresh ? h("span", { className: "dmtt-tag is-orange" }, L("Conta nova", "New account")) : null) : null; })()
+      : (r.bot || r.fresh || spamTag || r.declined) ? h("span", { className: "dmtt-fr-tags" },
         r.declined ? h("span", { className: "dmtt-tag is-purple", title: L(`Recusado ${r.declined.count}× · primeira vez em ${fmtDate(r.declined.firstAt).slice(0, 10)}`, `Declined ${r.declined.count}× · first on ${fmtDate(r.declined.firstAt).slice(0, 10)}`) }, r.declined.count > 1 ? L(`Recusado ${r.declined.count}×`, `Declined ${r.declined.count}×`) : L(`Você recusou em ${fmtDate(r.declined.lastAt).slice(0, 5)}`, `You declined on ${new Date(r.declined.lastAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit" })}`)) : null,
         r.bot ? h("span", { className: "dmtt-tag is-red" }, L("Possível bot", "Possible bot")) : null,
         r.fresh ? h("span", { className: "dmtt-tag is-orange" }, L("Conta nova", "New account")) : null,
         spamTag ? h("span", { className: "dmtt-tag" }, spamTag) : null) : null,
-      h(RequestActions, { r })));
+      outgoing ? h(SentActions, { r }) : h(RequestActions, { r })));
 }
 function RemovedRow({ r, isNew }) {
   useTicker(30000);
@@ -4646,7 +4749,7 @@ function FriendsScreen({ tab: initialTab }) {
   const query = normalize(q.trim());
   const matches = (id, x) => !query || normalize(`${nameOf(id, x || {})} ${usernameOf(id) || x?.username || ""}`).includes(query);
   const [opened, setOpened] = React.useState(() => new Set([tab]));
-  React.useEffect(() => { if (tab === "requests") markReqSeen(); else markRemovedSeen(); setOpened((o) => new Set([...o, tab])); }, [tab]);
+  React.useEffect(() => { if (tab === "requests") markReqSeen(); else if (tab === "removed") markRemovedSeen(); setOpened((o) => new Set([...o, tab])); }, [tab]);
   if (!getSettings().friendsEnabled) {
     return h(React.Fragment, null, h(LargeTitle, { title: NAMES.friends() }),
       h(Group, null, h(NavRow, { icon: "personBell", color: "#34c759", title: L("Ativar Solicitações", "Turn on Requests"), onClick: () => nav.push({ type: "settingsPage", id: "friends" }) })));
@@ -4661,15 +4764,21 @@ function FriendsScreen({ tab: initialTab }) {
   const spam = all.filter((r) => r.spam);
   const removedAll = getRemovedFriends();
   const removed = removedAll.filter((r) => matches(r.userId, r));
+  const sentAll = getSettings().sentReqTrack ? sentRequests() : [];
+  const sentShown = sentAll.filter((r) => matches(r.id, r));
   const newReq = opened.has("requests") ? 0 : shown.filter((r) => r.sentAt > seen.req).length;
   const newRem = opened.has("removed") ? 0 : removedAll.filter((r) => r.at > seen.rem).length;
   const rules = getSpamGuilds().length + (getSettings().spamHideBots ? 1 : 0) + (getSettings().spamDeclined ? 1 : 0);
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade, quem te removeu e quem desistiu", "Friend requests, who removed you and who gave up") }),
-    h(Group, null, h(NavRow, { icon: "userX", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou e não mandou, e quem cancelou o pedido", "Who typed and didn't send, and who canceled their request"), badge: unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")), onClick: () => nav.push({ type: "contacts" }) })),
-    h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
-    (tab === "requests" ? pending.length : removedAll.length) ? h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome ou @", "Search by name or @") }) : null,
-    tab === "requests" ? h(React.Fragment, null,
+    h(Group, null, h(NavRow, { icon: "userX", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou e não mandou, cancelou o pedido ou recusou o seu", "Who typed and didn't send, canceled their request or declined yours"), badge: unseenGaveUp(seenOf), onClick: () => nav.push({ type: "contacts" }) })),
+    h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Recebidos", "Received"), newReq || null, true], ["sent", L("Enviados", "Sent"), sentAll.length || null, false], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
+    (tab === "requests" ? pending.length : tab === "sent" ? sentAll.length : removedAll.length) ? h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome ou @", "Search by name or @") }) : null,
+    tab === "sent" ? (sentShown.length
+      ? h(Group, { header: L(`${sentShown.length} ${plural(sentShown.length, "pedido enviado", "pedidos enviados")} sem resposta`, `${sentShown.length} sent ${plural(sentShown.length, "request", "requests")} with no reply`), footer: L("Se a pessoa recusar, o pedido vai pra Desistiram › Pedidos recusados. Se aceitar, ele só some daqui.", "If they decline, the request moves to Gave up › Declined requests. If they accept, it just leaves this list.") }, sentShown.map((r) => h(RequestRow, { key: r.id, r, isNew: false, outgoing: true })))
+      : sentAll.length ? h(Empty, { icon: "search", title: L("Ninguém encontrado", "No one found") }, L(`Nenhum pedido enviado com "${q.trim()}".`, `No sent requests matching "${q.trim()}".`))
+      : h(Empty, { icon: "personBell", title: L("Nenhum pedido enviado", "No sent requests") }, getSettings().sentReqTrack ? L("Os pedidos de amizade que você mandar e ainda estiverem sem resposta aparecem aqui.", "Friend requests you send that haven't been answered yet show up here.") : L("Ligue \"Pedidos enviados e recusados\" em Ajustes › Solicitações.", "Turn on \"Sent and declined requests\" in Settings › Requests.")))
+    : tab === "requests" ? h(React.Fragment, null,
       h(Group, null,
         h(NavRow, { icon: "shield", color: "#ff9f0a", title: NAMES.spamFilter(), detail: rules ? String(rules) : L("Desligado", "Off"), onClick: () => nav.push({ type: "spamFilter" }) }),
         h(NavRow, { icon: "ban", color: "#8e8e93", title: "Spam", detail: String(spam.length), onClick: () => nav.push({ type: "spam" }) })),
@@ -5944,9 +6053,10 @@ function settingsPages() {
     { id: "friends", title: NAMES.friends(), icon: "personBell", color: "#34c759", summary: () => (getSettings().friendsEnabled ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [
         { footer: L("Mostra um botão no topo com os pedidos de amizade pendentes, quem te removeu da lista de amigos e quem desistiu de falar com você. Não manda aviso dos pedidos, só o contador vermelho.", "Adds a top bar button with your pending friend requests, who removed you as a friend and who gave up reaching you. No notifications for requests, just the red counter."),
-          items: [{ ...sw("friendsEnabled", L("Ativar Solicitações", "Turn on Requests")), after: (v) => { if (v) { safe(() => initFriends()); if (getSettings().friendReqTrack) safe(() => initPendingReqs()); } syncDOM(); } }] },
+          items: [{ ...sw("friendsEnabled", L("Ativar Solicitações", "Turn on Requests")), after: (v) => { if (v) { safe(() => initFriends()); if (getSettings().friendReqTrack) safe(() => initPendingReqs()); safe(() => initOutgoingReqs()); } syncDOM(); } }] },
         { title: NAMES.contacts(), items: [
         sw("firstContactTrack", L("Digitou pela 1ª vez", "First-time typers"), L("Alguém que nunca falou com você digitou e parou sem enviar. Quem envia a mensagem não entra (evita bots).", "Someone who never talked to you typed and stopped without sending. People who do send aren't listed (keeps bots out).")),
+        sw("sentReqTrack", L("Pedidos enviados e recusados", "Sent and declined requests"), L("Mostra os pedidos que você mandou e avisa quando alguém recusa. Os que você cancela não entram.", "Shows the requests you sent and tells you when someone declines. Ones you cancel aren't listed.")),
         { ...sw("friendReqTrack", L("Pedidos de amizade cancelados", "Canceled friend requests"), L("Quem te manda pedido e retira. Suas recusas não entram.", "Someone sends you a request and takes it back. Requests you decline aren't listed.")), after: (v) => v && initPendingReqs() }] },
         { title: L("Etiquetas", "Tags"), footer: L("\"Possível bot\": conta nova, sem amigos em comum, sem contas conectadas e sem Nitro. As etiquetas não escondem ninguém; pra isso use o Filtro anti-spam.", "\"Possible bot\": a new account with no mutual friends, no connected accounts and no Nitro. Tags don't hide anyone; use the Spam filter for that."),
           items: [num("friendsNewDays", L("\"Conta nova\" até", "\"New account\" up to"), 1, 3650, 1, L("dias", "days")), num("friendsBotDays", L("\"Possível bot\" até", "\"Possible bot\" up to"), 1, 3650, 1, L("dias", "days"))] },
@@ -6180,7 +6290,7 @@ function updateBadge() {
   const badge = toolbarBtn?.querySelector(".dmtt-toolbar-badge");
   if (!badge) return;
   const n = getSettings().showBadge
-    ? unseenTyping(seenOf("typing")) + unseenMentionsAll(seenOf) + unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests"))
+    ? unseenTyping(seenOf("typing")) + unseenMentionsAll(seenOf) + unseenGaveUp(seenOf)
     : 0;
   badge.hidden = !n;
   badge.textContent = n > 99 ? "99+" : String(n);
@@ -6816,6 +6926,7 @@ module.exports = class Lurk {
     Scheduler.every("backup", 6 * 3600000, () => runBackup(false), 30000);
     Scheduler.once("mediaUpkeep", 60000, () => { safe(() => migrateAllProfileMedia()); safe(() => enforceMediaLimit()); safe(() => enforceProfileLimit()); });
     safe(() => initPendingReqs());
+    safe(() => initOutgoingReqs());
     patchRelationshipActions();
     this.patchContextMenus();
     startDOM();
