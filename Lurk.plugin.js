@@ -5329,24 +5329,30 @@ function ActivityList({ id, events }) {
           h("span", { className: "dmtt-row-sub" }, joinNodes([durationOf(e), e.devices?.length && e.to !== "offline" ? h(Devices, { devices: e.devices }) : null]))))) });
 }
 function MessagesList({ id, messages }) {
-  const [onlyChanged, setOnlyChanged] = useNavState("onlyChanged", false);
+  useBus(reactBus);
+  const [mode, setMode] = useNavState("msgMode", "a");
+  const onlyChanged = mode === "c";
   const [where, setWhere] = useNavState("msgWhere", "all");
   const [limit, setLimit] = React.useState(50);
-  let mine = messages.filter((m) => m.userId === id);
+  const timeOf = (m) => (m.kind === "reaction" ? m.at : m.createdAt);
+  const reacts = getVipReactions().filter((r) => r.userId === id);
+  let mine = [...messages.filter((m) => m.userId === id), ...reacts].sort((a, b) => timeOf(b) - timeOf(a));
   const changed = mine.filter((m) => m.deletedAt || m.edits?.length).length;
   if (where === "guild") mine = mine.filter((m) => m.guildId);
   if (where === "dm") mine = mine.filter((m) => !m.guildId);
   if (onlyChanged) mine = mine.filter((m) => m.deletedAt || m.edits?.length);
+  if (mode === "r") mine = mine.filter((m) => m.kind === "reaction");
   return h(React.Fragment, null,
     h("div", { className: "dmtt-row2" },
-      h(Chips, { label: L("Filtrar", "Filter"), value: onlyChanged ? "c" : "a", onChange: (v) => setOnlyChanged(v === "c"), options: [["a", L("Todas", "All")], ["c", L("Apagadas/editadas", "Deleted/edited"), changed]] }),
+      h(Chips, { label: L("Filtrar", "Filter"), value: mode, onChange: setMode, options: [["a", L("Todas", "All")], ["c", L("Apagadas/editadas", "Deleted/edited"), changed], ["r", L("Reações", "Reactions"), reacts.length]] }),
       h(Chips, { label: L("Onde", "Where"), value: where, onChange: setWhere, options: [["all", L("Tudo", "Everywhere")], ["guild", L("Servidores", "Servers")], ["dm", L("Privado", "DMs")]] })),
-    mine.length ? h(DayList, { items: mine.slice(0, limit), getTime: (m) => m.createdAt, render: (m) => {
+    mine.length ? h(DayList, { items: mine.slice(0, limit), getTime: timeOf, render: (m) => {
+      if (m.kind === "reaction") return h(ReactionCard, { key: m.id, r: m, showPlace: true });
       const edited = m.edits?.length > 0;
       const current = edited ? m.edits[m.edits.length - 1].content : m.content;
       const body = current || (m.attachments?.length ? "" : m.stickers?.length ? L(`[figurinha: ${m.stickers.join(", ")}]`, `[sticker: ${m.stickers.join(", ")}]`) : NO_TEXT());
       return h(Flash, { key: m.id, isNew: activityAt(m) > seenSnap(`vip:${id}:messages`) }, h(MessageEntry, { m, body, edited }));
-    } }) : h(Empty, { icon: "at", title: onlyChanged ? L("Nada apagado ou editado", "Nothing deleted or edited") : L("Nenhuma mensagem ainda", "No messages yet") }),
+    } }) : h(Empty, { icon: "at", title: onlyChanged ? L("Nada apagado ou editado", "Nothing deleted or edited") : mode === "r" ? L("Nenhuma reação ainda", "No reactions yet") : L("Nenhuma mensagem ainda", "No messages yet") }),
     mine.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 50) }, L("Mostrar mais", "Show more")) : null);
 }
 function MessageEntry({ m, body, edited, who }) {
