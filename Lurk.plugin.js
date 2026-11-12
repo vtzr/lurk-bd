@@ -6268,7 +6268,7 @@ function HealthList() {
     h("span", { className: "dmtt-row-detail" }, c.ok ? L("Funcionando", "Working") : c.bad ? L("Parou", "Broken") : L("Indisponível", "Unavailable")));
   const report = () => {
     const text = [`Lurk ${VERSION}`, ...checks.map((c) => `${c.ok ? "OK " : c.bad ? "ERRO" : "FALTA"} ${c.id}`), ...signals.map(([key]) => `${key}: ${health.last[key] ? `${Math.round((Date.now() - health.last[key]) / 1000)}s` : "-"}`)].join("\n");
-    const ok = safe(() => { DiscordNative.clipboard.copy(text); return true; }) || safe(() => { navigator.clipboard.writeText(text); return true; });
+    const ok = safe(() => { window.DiscordNative.clipboard.copy(text); return true; }) || safe(() => { navigator.clipboard.writeText(text); return true; });
     toast(ok ? L("Diagnóstico copiado", "Diagnostics copied") : L("Não foi possível copiar", "Couldn't copy"), { type: ok ? "success" : "error" });
   };
   return h(React.Fragment, null,
