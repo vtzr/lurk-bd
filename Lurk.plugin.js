@@ -53,6 +53,9 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.17.0", items: [
+    ["fixed", "Histórico VIP › Perfil: o status personalizado dos VIPs (o texto que a pessoa escreve no perfil) voltou a ser registrado. Aparece quando ela define, muda ou remove o status, com o emoji, inclusive emojis personalizados. Ficar offline não conta mais como remover o status, e mudanças feitas com o seu Discord fechado aparecem quando você volta.", "VIP history › Profile: VIPs' custom status (the text people write on their profile) is logged again. It shows when they set, change or clear it, with the emoji, including custom emojis. Going offline no longer counts as clearing the status, and changes made while your Discord was closed show up when you're back."],
+    ["new", "Histórico VIP › Perfil: registra quando o VIP define, muda ou remove o status personalizado (aquele texto que a pessoa escreve), mostrando o antes e o depois.", "VIP history › Profile: logs when a VIP sets, changes or clears their custom status (the text they write), showing the before and after."],
+    ["improved", "Perfil do VIP: tocar na foto grande abre o perfil da pessoa no Discord.", "VIP page: tapping the large avatar opens the person's Discord profile."],
     ["improved", "Companhias de call: a lista é guardada pelo ID da conta, então continua certa mesmo que a pessoa troque de nome ou @. Quando ela troca, os nomes e @ anteriores aparecem do lado, em \"Também\".", "Call companions: the list is keyed by account ID, so it stays correct even if the person changes their name or @. When they do, their previous names and @ show next to them under \"Also\"."],
     ["new", "Histórico VIP › Calls: uma aba nova com todas as calls dos VIPs juntas, a mais recente no topo e a que está rolando agora marcada ao vivo. Cada call nova acende o contador vermelho na aba e no ícone do Histórico VIP, igual às outras atividades.", "VIP history › Calls: a new tab with all your VIPs' calls together, newest on top and the ongoing one marked live. Each new call lights up the red counter on the tab and on the VIP history icon, just like the other activity."],
   ] },
@@ -2556,6 +2559,36 @@ function endSession(key, register) {
 }
 
 const presenceCache = new Map();
+const customStatusCache = new Map();
+const rawActivities = new Map();
+function csFrom(acts) {
+  const cs = (acts || []).find((a) => a && (a.type === 4 || a.id === "custom"));
+  if (!cs) return null;
+  const text = cs.state || null;
+  const emoji = cs.emoji && cs.emoji.name ? cs.emoji.name : null;
+  return text || emoji ? { text, emoji, emojiId: cs.emoji?.id || null, animated: !!cs.emoji?.animated } : null;
+}
+function customStatusOf(userId) {
+  try {
+    const raw = rawActivities.get(userId);
+    if (raw) return csFrom(raw.activities);
+    return csFrom(PresenceStore?.getActivities?.(userId));
+  } catch { return null; }
+}
+function onPresenceUpdates(a) {
+  try {
+    const list = Array.isArray(a?.updates) ? a.updates : a?.user ? [a] : [];
+    for (const u of list) {
+      const id = u?.user?.id || u?.userId;
+      if (!id || !isVip(id) || !Array.isArray(u.activities)) continue;
+      rawActivities.set(id, { at: Date.now(), activities: u.activities });
+      if (!diag.csRaw) { diag.csRaw = { at: new Date().toISOString(), types: u.activities.map((x) => x?.type), hasCs: !!csFrom(u.activities) }; saveDiag(); }
+    }
+  } catch {}
+}
+const statusKey = (cs) => (cs ? `${cs.emojiId || cs.emoji || ""}\u0001${cs.text || ""}` : "");
+const getCsSnap = () => Data.load(k("vipCustomStatus")) || {};
+const csEvent = (id, prev, cur, away) => ({ userId: id, at: Date.now(), field: "status", from: prev?.text || null, fromEmoji: prev?.emoji || null, fromEmojiId: prev?.emojiId || null, fromAnimated: !!prev?.animated, to: cur?.text || null, toEmoji: cur?.emoji || null, toEmojiId: cur?.emojiId || null, toAnimated: !!cur?.animated, away: !!away });
 const isOnlineStatus = (st) => !!st && st !== "offline";
 let seenCache = null;
 const getSeen = () => (seenCache ??= Data.load(k("vipSeen")) || {});
@@ -2626,18 +2659,47 @@ function fmtSeen({ kind, at }) {
 const fmtSeenTitle = ({ kind, at, approx }) => approx && kind === "offline" ? L(`Ficou offline enquanto o Lurk estava fechado, depois de ${fmtDM(at)}`, `Went offline while Lurk was closed, after ${fmtDM(at)}`) : approx && kind === "online" ? L(`Ficou online enquanto o Lurk estava fechado, depois de ${fmtDM(at)}`, `Came online while Lurk was closed, after ${fmtDM(at)}`) : kind === "invisible" ? L(`Aparece offline, mas teve atividade ${fmtDM(at)}`, `Shows offline, but was active ${fmtDM(at)}`) : `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 function initPresenceCache() {
   presenceCache.clear();
-  for (const id of Object.keys(getVipList())) presenceCache.set(id, rawPresence(id));
+  customStatusCache.clear();
+  const snap = getCsSnap();
+  const evs = [];
+  let changed = false;
+  const sample = [];
+  for (const id of Object.keys(getVipList())) {
+    const p = rawPresence(id);
+    presenceCache.set(id, p);
+    if (isOnlineStatus(p?.status)) {
+      const cur = customStatusOf(id);
+      if (id in snap && statusKey(snap[id]) !== statusKey(cur)) evs.push(csEvent(id, snap[id], cur, true));
+      customStatusCache.set(id, cur);
+      if (!(id in snap) || statusKey(snap[id]) !== statusKey(cur)) { snap[id] = cur; changed = true; }
+    } else if (id in snap) customStatusCache.set(id, snap[id]);
+    safe(() => sample.push({ id: id.slice(-4), st: p?.status || null, types: (PresenceStore?.getActivities?.(id) || []).map((a) => a?.type), hasCs: !!customStatusOf(id) }));
+  }
+  if (changed) Data.save(k("vipCustomStatus"), snap);
+  if (evs.length) safe(() => addProfileEvents(evs));
+  diag.cs = { at: new Date().toISOString(), getActivities: typeof PresenceStore?.getActivities, vips: sample };
+  diag.profileModal = { found: !!UserProfileModal, via: UserProfileModal?.via || (UserProfileModal ? "module" : null) };
+  saveDiag();
   safe(() => initSeen());
 }
 function onPresenceChange() {
   healthMark("presence");
   let seenChanged = false;
+  const statusEvs = [];
+  const csChanged = new Map();
   try {
     const list = getVipList();
     const s = getSettings();
     for (const id of Object.keys(list)) {
       const p = rawPresence(id);
       if (!p) continue;
+      if (isOnlineStatus(p.status)) {
+        const prevCs = customStatusCache.has(id) ? customStatusCache.get(id) : undefined;
+        const curCs = customStatusOf(id);
+        if (prevCs !== undefined && statusKey(curCs) !== statusKey(prevCs)) statusEvs.push(csEvent(id, prevCs, curCs, false));
+        if (prevCs === undefined || statusKey(curCs) !== statusKey(prevCs)) csChanged.set(id, curCs);
+        customStatusCache.set(id, curCs);
+      }
       const prev = presenceCache.get(id);
       presenceCache.set(id, p);
       if (!prev || prev.status === p.status) continue;
@@ -2653,6 +2715,8 @@ function onPresenceChange() {
       }
     }
   } catch (e) { Logger.error("presence", e); }
+  if (csChanged.size) safe(() => { const snap = getCsSnap(); for (const [id, cs] of csChanged) snap[id] = cs; Data.save(k("vipCustomStatus"), snap); });
+  if (statusEvs.length) safe(() => addProfileEvents(statusEvs));
   if (seenChanged) safe(() => placeLastSeen());
 }
 
@@ -3098,8 +3162,9 @@ async function respondRequest(id, accept, confirmStranger) {
 }
 function openProfile(id) {
   try {
-    if (UserProfileModal) return UserProfileModal.openUserProfileModal({ userId: id, analyticsLocation: { section: "Lurk" } });
-  } catch (e) { Logger.error("profile", e); }
+    if (UserProfileModal) { const r = UserProfileModal.openUserProfileModal({ userId: id, analyticsLocation: { section: "Lurk" } }); diag.openProfile = { at: new Date().toISOString(), ok: true }; saveDiag(); return r; }
+    diag.openProfile = { at: new Date().toISOString(), ok: false, reason: "no module" }; saveDiag();
+  } catch (e) { Logger.error("profile", e); diag.openProfile = { at: new Date().toISOString(), ok: false, reason: String(e?.message || e).slice(0, 200) }; saveDiag(); }
   openDM(null, id, false);
 }
 const bulk = { running: false, kind: null, done: 0, total: 0, failed: 0, cancel: false };
@@ -4191,9 +4256,10 @@ function SettingRow({ item }) {
       item.note ? h("span", { className: "dmtt-row-sub" }, txt(item.note)) : null),
     control);
 }
-function Hero({ userId, url, status, name, username, chips, children, below }) {
+function Hero({ userId, url, status, name, username, chips, children, below, onAvatar }) {
+  const av = h(Avatar, { userId, url, status, size: 72 });
   return h("div", { className: "dmtt-hero" },
-    h(Avatar, { userId, url, status, size: 72 }),
+    onAvatar ? h("button", { className: "dmtt-hero-av", onClick: onAvatar, title: L("Abrir o perfil no Discord", "Open their Discord profile"), "aria-label": L("Abrir o perfil no Discord", "Open their Discord profile") }, av) : av,
     h("div", { className: "dmtt-hero-name" }, name),
     username ? h("div", { className: "dmtt-hero-user" }, `@${username}`) : null,
     chips?.length ? h("div", { className: "dmtt-chips" }, chips.map((c, i) => h("span", { key: i, className: "dmtt-chip" }, c))) : null,
@@ -5070,6 +5136,10 @@ function profileChangeText(e) {
     case "banner": return [e.to ? L("mudou o banner", "changed their banner") : L("removeu o banner", "removed their banner"), null];
     case "pronouns": return [L("mudou os pronomes", "changed their pronouns"), `${e.from || "—"} → ${e.to || "—"}`];
     case "bio": return [e.to ? L("mudou a bio", "changed their bio") : L("apagou a bio", "cleared their bio"), null];
+    case "status":
+      if (!e.to && !e.toEmoji) return [L("removeu o status", "cleared their status"), null];
+      if (!e.from && !e.fromEmoji) return [L("definiu um status", "set a status"), null];
+      return [L("mudou o status", "changed their status"), null];
     case "connection": return [e.action === "added" ? L(`conectou ${connName(e.conn?.type)}`, `connected ${connName(e.conn?.type)}`) : L(`removeu ${connName(e.conn?.type)}`, `removed ${connName(e.conn?.type)}`), e.conn?.name || null];
     case "guildJoin": return [L("entrou num servidor em comum", "joined a shared server"), null];
     case "guildLeave": return [L("saiu de um servidor em comum", "left a shared server"), null];
@@ -5096,6 +5166,12 @@ function ServerFacts({ e }) {
     h("span", { className: "dmtt-srv-k" }, k),
     h("span", { className: `dmtt-srv-v${strong ? " is-strong" : ""}` }, Array.isArray(v) ? v.map((x, i) => h("span", { key: i, className: "dmtt-srv-line" }, x)) : v))));
 }
+function CsText({ text, emoji, emojiId, animated }) {
+  const [broken, setBroken] = React.useState(false);
+  return h("span", { className: "dmtt-cs" },
+    emojiId && !broken ? h("img", { onError: () => setBroken(true), className: "dmtt-cs-emoji", src: `https://cdn.discordapp.com/emojis/${emojiId}.${animated ? "gif" : "png"}?size=32`, alt: emoji || "", title: emoji ? `:${emoji}:` : "" }) : emoji ? h("span", { className: "dmtt-cs-uni" }, emojiId ? `:${emoji}:` : emoji) : null,
+    text ? h("span", null, text) : null);
+}
 function ProfileChangeRow({ e, isNew, showName }) {
   const [what, detail] = profileChangeText(e);
   const flash = useFlash(isNew);
@@ -5107,6 +5183,7 @@ function ProfileChangeRow({ e, isNew, showName }) {
       e.field === "avatar" ? h("span", { className: "dmtt-pc-imgs" }, h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.from, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.from) }), h("span", { className: "dmtt-pc-arrow" }, "→"), h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.to, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.to) })) : null,
       e.field === "banner" ? h("span", { className: "dmtt-pc-imgs" }, e.from ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.from, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.from) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner")), h("span", { className: "dmtt-pc-arrow" }, "→"), e.to ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.to, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.to) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner"))) : null,
       e.field === "bio" ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Antes: ", "Before: ")), e.from || "—"), h("div", null, h("b", null, L("Depois: ", "After: ")), e.to || "—")) : null,
+      e.field === "status" ? h("div", { className: "dmtt-quote" }, (e.from || e.fromEmoji) ? h("div", null, h("b", null, L("Antes: ", "Before: ")), h(CsText, { text: e.from, emoji: e.fromEmoji, emojiId: e.fromEmojiId, animated: e.fromAnimated })) : null, h("div", null, h("b", null, L("Depois: ", "After: ")), (e.to || e.toEmoji) ? h(CsText, { text: e.to, emoji: e.toEmoji, emojiId: e.toEmojiId, animated: e.toAnimated }) : L("sem status", "no status"))) : null,
       e.field === "guildJoin" || e.field === "guildLeave" ? h(GuildPill, { id: e.guildId, name: e.guildName }) : null,
       e.field === "guildJoin" || e.field === "guildLeave" ? h(ServerFacts, { e }) : null,
       e.away ? h("span", { className: "dmtt-row-sub" }, L("Mudou enquanto seu Discord estava fechado", "Changed while your Discord was closed")) : null),
@@ -6255,7 +6332,7 @@ function VipPersonScreen({ userId: id }) {
   const toggles = vipAlertList();
   const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
   return h(React.Fragment, null,
-    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, below: (() => { const t = safe(() => agoraOf(id, !!p && p.status !== "offline")); return t ? h("div", { className: "dmtt-agora" }, t) : null; })() },
+    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, onAvatar: () => safe(() => openProfile(id)), below: (() => { const t = safe(() => agoraOf(id, !!p && p.status !== "offline")); return t ? h("div", { className: "dmtt-agora" }, t) : null; })() },
       h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dm, id, false) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.routine, size: 18 }), label: L("Rotina", "Routine"), onClick: () => nav.push({ type: "vipRoutine", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.gallery, size: 18 }), label: L("Galeria", "Gallery"), onClick: () => nav.push({ type: "vipGallery", userId: id }) }),
@@ -6987,6 +7064,11 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-row-user { font-weight: 400; font-size: 12.5px; color: var(--c-muted); }
 .dmtt-row-sub { font-size: 12.5px; color: var(--c-muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .dmtt-aka { margin-top: 2px; font-size: 11.5px; opacity: .8; }
+.dmtt-cs { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.dmtt-cs-emoji { width: 16px; height: 16px; object-fit: contain; }
+.dmtt-cs-uni { font-size: 14px; line-height: 1; }
+.dmtt-hero-av { padding: 0; border: none; background: none; cursor: pointer; border-radius: 50%; line-height: 0; }
+.dmtt-hero-av:hover { opacity: .85; }
 .dmtt-row-sub:has(.dmtt-meta-line) { display: block; -webkit-line-clamp: unset; }
 .dmtt-meta-line { display: block; }
 .dmtt-nowrap { white-space: nowrap; }
@@ -7328,6 +7410,8 @@ const SUBS = {
   MESSAGE_REACTION_ADD: onReactionAdd,
   MESSAGE_REACTION_REMOVE: onReactionRemove,
   VOICE_STATE_UPDATES: onVoiceStates,
+  PRESENCE_UPDATES: onPresenceUpdates,
+  PRESENCE_UPDATE: onPresenceUpdates,
   USER_PROFILE_FETCH_SUCCESS: onProfileFetched,
   CONNECTION_OPEN: () => { setTimeout(subscribeVipGuilds, 3000); setTimeout(() => safe(() => syncVipVoice()), 4000); setTimeout(() => safe(() => initFriends()), 5000); },
 };
