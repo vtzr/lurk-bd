@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.17.0", items: [
+    ["improved", "Calls dos VIPs em servidores que você não está olhando: o Lurk agora usa também o resumo que o Discord manda de tempos em tempos desses servidores, então percebe quando o VIP entra, sai ou troca de call, e quem entra e sai junto, sem você precisar abrir o servidor. Nesses casos a call mostra que as mudanças chegam com atraso.", "VIP calls in servers you aren't looking at: Lurk now also uses the summary Discord sends every so often for those servers, so it notices when the VIP joins, leaves or switches calls, and who joins and leaves with them, without you opening the server. In those cases the call shows that changes arrive with a delay."],
     ["new", "Calls dos VIPs: quando o VIP sai da call, o Lurk continua acompanhando o canal por mais 3 minutos e registra quem saiu logo em seguida e quanto tempo depois. Quem ficou aparece como \"continuou depois que saiu\".", "VIP calls: when the VIP leaves a call, Lurk keeps watching the channel for 3 more minutes and logs who left right after and how long later. Anyone who stayed shows as \"stayed after they left\"."],
     ["fixed", "Histórico VIP › Perfil: o status personalizado dos VIPs (o texto que a pessoa escreve no perfil) voltou a ser registrado. Aparece quando ela define, muda ou remove o status, com o emoji, inclusive emojis personalizados. Ficar offline não conta mais como remover o status, e mudanças feitas com o seu Discord fechado aparecem quando você volta.", "VIP history › Profile: VIPs' custom status (the text people write on their profile) is logged again. It shows when they set, change or clear it, with the emoji, including custom emojis. Going offline no longer counts as clearing the status, and changes made while your Discord was closed show up when you're back."],
     ["new", "Histórico VIP › Perfil: registra quando o VIP define, muda ou remove o status personalizado (aquele texto que a pessoa escreve), mostrando o antes e o depois.", "VIP history › Profile: logs when a VIP sets, changes or clears their custom status (the text they write), showing the before and after."],
@@ -2260,12 +2261,13 @@ function syncVipVoice() {
     const vs = normVS(safe(() => VoiceStateStore.getVoiceStateForUser(id)));
     const cid = vs?.channelId || null;
     const cur = vipVoice.get(id);
-    if ((cur?.channelId || null) === cid) { if (cur && vs) { applyVoiceFlags(cur, vs); safe(() => checkInvisible(id, "voice", placeLabel(cur))); } continue; }
+    if ((cur?.channelId || null) === cid) { if (cur && vs) { applyVoiceFlags(cur, vs); safe(() => checkInvisible(id, "voice", placeLabel(cur))); if (safe(() => reconcilePeers(cur))) changed = true; } continue; }
     if (cur) closeVoice(id);
     if (cid) { openVoice(id, { ...vs, userId: id }, true); safe(() => checkInvisible(id, "voice", null)); }
     changed = true;
   }
   if (changed) vipBus.emit();
+  if (afterWatch.size) safe(() => checkAfterWatchStore());
   for (const id of vipVoice.keys()) safe(() => checkCallCombos(id));
 }
 function closeVoice(userId, cut) {
@@ -2311,6 +2313,19 @@ function checkAfterWatch(uid, channelId) {
     vipBus.emit();
   }
 }
+function checkAfterWatchStore() {
+  for (const [key, rec] of [...afterWatch]) {
+    if (Date.now() > rec.watchUntil) { finishAfterWatch(key); continue; }
+    if (vipVoice.get(rec.userId)?.channelId === rec.channelId) { finishAfterWatch(key, true); continue; }
+    const here = new Set(usersInChannel(rec.channelId));
+    let ch = false;
+    for (const p of rec.peers || []) {
+      if (p.leftAt || here.has(p.id)) continue;
+      p.leftAt = Date.now(); p.leftAfterVip = p.leftAt - rec.leftAt; p.approxLeft = !isLiveGuild(rec.guildId); ch = true;
+    }
+    if (ch) { saveVipSoon("voice"); vipBus.emit(); }
+  }
+}
 function finishAfterWatch(key, cancelled) {
   const rec = afterWatch.get(key);
   if (!rec) return;
@@ -2318,9 +2333,10 @@ function finishAfterWatch(key, cancelled) {
   if (!cancelled) {
     const here = new Set(usersInChannel(rec.channelId));
     const at = Math.min(Date.now(), rec.watchUntil);
+    rec.watchLive = isLiveGuild(rec.guildId);
     for (const p of rec.peers || []) {
       if (p.leftAt) continue;
-      if (here.has(p.id)) p.stayedAfter = true;
+      if (here.has(p.id)) { if (rec.watchLive) p.stayedAfter = true; }
       else { p.leftAt = at; p.leftAfterVip = at - rec.leftAt; p.approxLeft = true; }
     }
   }
@@ -2360,8 +2376,30 @@ function mergedVS(raw) {
   if (st && (st.channelId || null) === (n.channelId || null)) return st;
   return n;
 }
+const liveVoiceAt = new Map();
+const isLiveGuild = (gid) => !gid || Date.now() - (liveVoiceAt.get(gid) || 0) < 10 * 60000;
+const passiveDiag = { n: 0, last: 0, gaps: [] };
+function onPassiveUpdate(a) {
+  const now = Date.now();
+  if (passiveDiag.last) passiveDiag.gaps = [now - passiveDiag.last, ...passiveDiag.gaps].slice(0, 20);
+  passiveDiag.n++; passiveDiag.last = now;
+  if (passiveDiag.n % 10 === 1) { diag.passive = { n: passiveDiag.n, type: a?.type || null, keys: Object.keys(a || {}).slice(0, 12), gapsS: passiveDiag.gaps.map((g) => Math.round(g / 1000)) }; saveDiag(); }
+  setTimeout(() => safe(() => syncVipVoice()), 0);
+}
+function reconcilePeers(v) {
+  const here = new Set(usersInChannel(v.channelId).filter((id) => id && id !== v.userId));
+  const log = (v.peerLog ||= {});
+  let ch = false;
+  for (const id of here) {
+    v.peers.add(id);
+    if (!log[id] || log[id].leftAt) { log[id] = { joinedAt: log[id]?.joinedAt || Date.now(), leftAt: null, rejoined: !!log[id] }; ch = true; }
+  }
+  for (const [id, l] of Object.entries(log)) if (!l.leftAt && !here.has(id)) { l.leftAt = Date.now(); ch = true; }
+  return ch;
+}
 function onVoiceStates(action) {
   healthMark("voice");
+  for (const raw of action?.voiceStates || []) { const g = raw?.guildId || raw?.guild_id; if (g) liveVoiceAt.set(g, Date.now()); }
   if (!diag.voiceSample && action?.voiceStates?.[0]) { diag.voiceSample = Object.keys(action.voiceStates[0]); saveDiag(); }
   const list = action?.voiceStates || [];
   setTimeout(() => { processVoiceStates(list); safe(() => processMyCall(list)); }, 0);
@@ -5849,7 +5887,7 @@ function VoiceDetail({ v, live, vipId }) {
     ...(!live ? [{ at: v.leftAt, text: v.cut ? L("Fim do registro (Discord fechado)", "Recording ended (Discord closed)") : L("Saiu da call", "Left the call") }] : []),
     ...(!live ? (v.peers || []).filter((p) => p.leftAfterVip != null).map((p) => ({ at: p.leftAt, after: true, text: L(`${p.name || nameOf(p.id)} saiu ${p.approxLeft ? "em até " : ""}${fmtDur(p.leftAfterVip)} depois`, `${p.name || nameOf(p.id)} left ${p.approxLeft ? "within " : ""}${fmtDur(p.leftAfterVip)} later`) })) : []),
     ...(!live && v.watchUntil && !v.watchDone && Date.now() < v.watchUntil ? [{ at: v.leftAt + 1, after: true, text: L(`Acompanhando quem sai por mais ${Math.max(1, Math.ceil((v.watchUntil - Date.now()) / 60000))} min`, `Watching who leaves for ${Math.max(1, Math.ceil((v.watchUntil - Date.now()) / 60000))} more min`) }] : []),
-    ...(!live && v.watchDone && !(v.peers || []).some((p) => p.leftAfterVip != null) ? [{ at: v.watchUntil, after: true, text: L("Ninguém mais saiu nos 3 minutos seguintes", "Nobody else left in the next 3 minutes") }] : []),
+    ...(!live && v.watchDone && v.watchLive !== false && !(v.peers || []).some((p) => p.leftAfterVip != null) ? [{ at: v.watchUntil, after: true, text: L("Ninguém mais saiu nos 3 minutos seguintes", "Nobody else left in the next 3 minutes") }] : []),
   ].sort((a, b) => a.at - b.at);
   const profileBtn = (pid) => h(ProfileButton, { pid });
   const vipUser = vipId ? UserStore?.getUser?.(vipId) : null;
@@ -5868,6 +5906,7 @@ function VoiceDetail({ v, live, vipId }) {
   };
   return h("div", { className: "dmtt-sub dmtt-vdetail" },
     h("div", { className: "dmtt-mini-h" }, live ? L(`Na call · ${inNow || total}`, `In the call · ${inNow || total}`) : L(`Quem estava · ${total}`, `Who was there · ${total}`)),
+    live && !isLiveGuild(v.guildId) ? h("div", { className: "dmtt-muted dmtt-small dmtt-vlimit" }, L("Você não está com esse servidor aberto, então o Discord só manda as mudanças dessa call de tempos em tempos. Abrir o servidor deixa tudo ao vivo.", "You don't have this server open, so Discord only sends this call's changes every so often. Opening the server makes it live.")) : null,
     limit ? h("div", { className: "dmtt-muted dmtt-small dmtt-vlimit" }, live ? L(`${inNow || total} de ${limit} lugares ocupados`, `${inNow || total} of ${limit} spots taken`) : L(`Limite da call: ${limit} ${plural(limit, "pessoa", "pessoas")}`, `Call limit: ${limit} ${plural(limit, "person", "people")}`)) : null,
     vipId ? h("div", { className: "dmtt-vpeer is-self" },
       h(Avatar, { userId: vipId, size: 26 }),
@@ -7461,6 +7500,8 @@ const SUBS = {
   MESSAGE_REACTION_REMOVE: onReactionRemove,
   VOICE_STATE_UPDATES: onVoiceStates,
   PRESENCE_UPDATES: onPresenceUpdates,
+  PASSIVE_UPDATE_V1: onPassiveUpdate,
+  PASSIVE_UPDATE_V2: onPassiveUpdate,
   PRESENCE_UPDATE: onPresenceUpdates,
   USER_PROFILE_FETCH_SUCCESS: onProfileFetched,
   CONNECTION_OPEN: () => { setTimeout(subscribeVipGuilds, 3000); setTimeout(() => safe(() => syncVipVoice()), 4000); setTimeout(() => safe(() => initFriends()), 5000); },
