@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.17.0", items: [
+    ["new", "Calls dos VIPs: quando o VIP sai da call, o Lurk continua acompanhando o canal por mais 3 minutos e registra quem saiu logo em seguida e quanto tempo depois. Quem ficou aparece como \"continuou depois que saiu\".", "VIP calls: when the VIP leaves a call, Lurk keeps watching the channel for 3 more minutes and logs who left right after and how long later. Anyone who stayed shows as \"stayed after they left\"."],
     ["fixed", "Histórico VIP › Perfil: o status personalizado dos VIPs (o texto que a pessoa escreve no perfil) voltou a ser registrado. Aparece quando ela define, muda ou remove o status, com o emoji, inclusive emojis personalizados. Ficar offline não conta mais como remover o status, e mudanças feitas com o seu Discord fechado aparecem quando você volta.", "VIP history › Profile: VIPs' custom status (the text people write on their profile) is logged again. It shows when they set, change or clear it, with the emoji, including custom emojis. Going offline no longer counts as clearing the status, and changes made while your Discord was closed show up when you're back."],
     ["new", "Histórico VIP › Perfil: registra quando o VIP define, muda ou remove o status personalizado (aquele texto que a pessoa escreve), mostrando o antes e o depois.", "VIP history › Profile: logs when a VIP sets, changes or clears their custom status (the text they write), showing the before and after."],
     ["improved", "Perfil do VIP: tocar na foto grande abre o perfil da pessoa no Discord.", "VIP page: tapping the large avatar opens the person's Discord profile."],
@@ -2281,8 +2282,51 @@ function closeVoice(userId, cut) {
     return { id, name: nameOf(id), username: u?.username || null, avatarURL: avatarOf(u, id), joinedAt: log.joinedAt || v.joinedAt, leftAt: log.leftAt || null, already: !!log.already };
   });
   delete v.peerLog;
-  d.voice = [{ ...v, peers, leftAt: end, cut: !!cut }, ...(d.voice || [])].slice(0, limitOf("vipMaxVoice", 50));
+  const rec = { ...v, peers, leftAt: end, cut: !!cut };
+  d.voice = [rec, ...(d.voice || [])].slice(0, limitOf("vipMaxVoice", 50));
   saveVipSoon("voice");
+  if (!cut) safe(() => startAfterWatch(rec));
+}
+const AFTER_WATCH = 3 * 60000;
+const afterWatch = new Map();
+function startAfterWatch(rec) {
+  if (!rec?.channelId) return;
+  const here = new Set(usersInChannel(rec.channelId));
+  if (!(rec.peers || []).some((p) => !p.leftAt && here.has(p.id))) return;
+  rec.watchUntil = rec.leftAt + AFTER_WATCH;
+  const key = `${rec.userId}:${rec.joinedAt}`;
+  afterWatch.set(key, rec);
+  setTimeout(() => safe(() => finishAfterWatch(key)), AFTER_WATCH + 1000);
+}
+function checkAfterWatch(uid, channelId) {
+  for (const [key, rec] of [...afterWatch]) {
+    if (Date.now() > rec.watchUntil) { finishAfterWatch(key); continue; }
+    if (vipVoice.get(rec.userId)?.channelId === rec.channelId) { finishAfterWatch(key, true); continue; }
+    if (channelId === rec.channelId) continue;
+    const p = (rec.peers || []).find((x) => x.id === uid);
+    if (!p || p.leftAt) continue;
+    p.leftAt = Date.now();
+    p.leftAfterVip = p.leftAt - rec.leftAt;
+    saveVipSoon("voice");
+    vipBus.emit();
+  }
+}
+function finishAfterWatch(key, cancelled) {
+  const rec = afterWatch.get(key);
+  if (!rec) return;
+  afterWatch.delete(key);
+  if (!cancelled) {
+    const here = new Set(usersInChannel(rec.channelId));
+    const at = Math.min(Date.now(), rec.watchUntil);
+    for (const p of rec.peers || []) {
+      if (p.leftAt) continue;
+      if (here.has(p.id)) p.stayedAfter = true;
+      else { p.leftAt = at; p.leftAfterVip = at - rec.leftAt; p.approxLeft = true; }
+    }
+  }
+  rec.watchDone = true;
+  saveVipSoon("voice");
+  vipBus.emit();
 }
 function initVoiceFor(id) {
   if (!getSettings().vipTrackVoice) return;
@@ -2330,6 +2374,7 @@ function processVoiceStates(list) {
       const vs = mergedVS(raw);
       const uid = vs?.userId;
       if (!uid) continue;
+      if (afterWatch.size) safe(() => checkAfterWatch(uid, vs.channelId || null));
       for (const v of vipVoice.values()) {
         if (uid === v.userId) continue;
         const log = (v.peerLog ||= {});
@@ -5802,6 +5847,9 @@ function VoiceDetail({ v, live, vipId }) {
     { at: v.joinedAt, initFlags: initOn, text: v.already ? L("Já estava na call quando o Lurk começou", "Was already in the call when Lurk started") : L("Entrou na call", "Joined the call") },
     ...evs.map((e) => ({ at: e.at, flag: e.flag, on: e.on, text: FLAG_EVENT(e.flag, e.on) })),
     ...(!live ? [{ at: v.leftAt, text: v.cut ? L("Fim do registro (Discord fechado)", "Recording ended (Discord closed)") : L("Saiu da call", "Left the call") }] : []),
+    ...(!live ? (v.peers || []).filter((p) => p.leftAfterVip != null).map((p) => ({ at: p.leftAt, after: true, text: L(`${p.name || nameOf(p.id)} saiu ${p.approxLeft ? "em até " : ""}${fmtDur(p.leftAfterVip)} depois`, `${p.name || nameOf(p.id)} left ${p.approxLeft ? "within " : ""}${fmtDur(p.leftAfterVip)} later`) })) : []),
+    ...(!live && v.watchUntil && !v.watchDone && Date.now() < v.watchUntil ? [{ at: v.leftAt + 1, after: true, text: L(`Acompanhando quem sai por mais ${Math.max(1, Math.ceil((v.watchUntil - Date.now()) / 60000))} min`, `Watching who leaves for ${Math.max(1, Math.ceil((v.watchUntil - Date.now()) / 60000))} more min`) }] : []),
+    ...(!live && v.watchDone && !(v.peers || []).some((p) => p.leftAfterVip != null) ? [{ at: v.watchUntil, after: true, text: L("Ninguém mais saiu nos 3 minutos seguintes", "Nobody else left in the next 3 minutes") }] : []),
   ].sort((a, b) => a.at - b.at);
   const profileBtn = (pid) => h(ProfileButton, { pid });
   const vipUser = vipId ? UserStore?.getUser?.(vipId) : null;
@@ -5833,7 +5881,9 @@ function VoiceDetail({ v, live, vipId }) {
       const flags = live && !p.leftAt ? liveFlagsOf(p.id) : null;
       const range = p.joinedAt ? joinNodes([
         p.already || p.joinedAt <= v.joinedAt ? L("já estava", "already there") : L(`entrou ${fmtHM(p.joinedAt)}`, `joined ${fmtHM(p.joinedAt)}`),
-        p.leftAt ? L(`saiu ${fmtHM(p.leftAt)}`, `left ${fmtHM(p.leftAt)}`) : live ? L("na call", "in the call") : L("até o fim", "until the end")]) : null;
+        p.leftAt ? L(`saiu ${fmtHM(p.leftAt)}`, `left ${fmtHM(p.leftAt)}`) : live ? L("na call", "in the call") : p.stayedAfter ? null : L("até o fim", "until the end"),
+        !live && p.leftAfterVip != null ? h("span", { className: "dmtt-vprev" }, L(`${p.approxLeft ? "em até " : ""}${fmtDur(p.leftAfterVip)} depois de ${nameOf(vipId, getVipList()[vipId] || {})}`, `${p.approxLeft ? "within " : ""}${fmtDur(p.leftAfterVip)} after ${nameOf(vipId, getVipList()[vipId] || {})}`)) : null,
+        !live && p.stayedAfter ? L(`continuou depois que ${nameOf(vipId, getVipList()[vipId] || {})} saiu`, `stayed after ${nameOf(vipId, getVipList()[vipId] || {})} left`) : null].filter(Boolean)) : null;
       return h("div", { key: p.id, className: `dmtt-vpeer ${p.leftAt ? "is-gone" : ""}` },
         h(Avatar, { userId: p.id, url: p.avatarURL, size: 26 }),
         h("span", { className: "dmtt-row-main" },
@@ -5849,7 +5899,7 @@ function VoiceDetail({ v, live, vipId }) {
     timeline.map((t, i) => h("div", { key: i, className: "dmtt-vt" },
       h("span", { className: "dmtt-num dmtt-muted" }, fmtTime(t.at)),
       t.flag ? h(FlagIcon, { flag: t.flag }) : h("span", { className: "dmtt-vt-dot" }),
-      h("span", { className: t.flag && !t.on ? "dmtt-muted" : null }, t.text),
+      h("span", { className: (t.flag && !t.on) || t.after ? "dmtt-muted" : null }, t.text),
       t.initFlags && t.initFlags.length ? h("span", { className: "dmtt-devices", style: { marginLeft: 6 } }, t.initFlags.map((f) => h(FlagIcon, { key: f, flag: f }))) : null)),
     h("div", { className: "dmtt-vt-foot" },
       h("span", { className: "dmtt-muted" }, L(`${fmtDur(end - v.joinedAt)} no total`, `${fmtDur(end - v.joinedAt)} total`)),
