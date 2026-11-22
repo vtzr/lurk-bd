@@ -55,7 +55,7 @@ const CHANGELOG = [
   { version: "2.17.0", items: [
     ["improved", "Calls dos VIPs em servidores que você não está olhando: o Lurk agora usa também o resumo que o Discord manda de tempos em tempos desses servidores, então percebe quando o VIP entra, sai ou troca de call, e quem entra e sai junto, sem você precisar abrir o servidor. Nesses casos a call mostra que as mudanças chegam com atraso.", "VIP calls in servers you aren't looking at: Lurk now also uses the summary Discord sends every so often for those servers, so it notices when the VIP joins, leaves or switches calls, and who joins and leaves with them, without you opening the server. In those cases the call shows that changes arrive with a delay."],
     ["new", "Calls dos VIPs: quando o VIP sai da call, o Lurk continua acompanhando o canal por mais 3 minutos e registra quem saiu logo em seguida e quanto tempo depois. Quem ficou aparece como \"continuou depois que saiu\".", "VIP calls: when the VIP leaves a call, Lurk keeps watching the channel for 3 more minutes and logs who left right after and how long later. Anyone who stayed shows as \"stayed after they left\"."],
-    ["fixed", "Histórico VIP › Perfil: o status personalizado dos VIPs (o texto que a pessoa escreve no perfil) voltou a ser registrado. Aparece quando ela define, muda ou remove o status, com o emoji, inclusive emojis personalizados. Ficar offline não conta mais como remover o status, e mudanças feitas com o seu Discord fechado aparecem quando você volta.", "VIP history › Profile: VIPs' custom status (the text people write on their profile) is logged again. It shows when they set, change or clear it, with the emoji, including custom emojis. Going offline no longer counts as clearing the status, and changes made while your Discord was closed show up when you're back."],
+    ["fixed", "Histórico VIP › Perfil: o status personalizado dos VIPs (o texto que a pessoa escreve no perfil) voltou a ser registrado. Aparece quando ela define, muda ou remove o status, com o emoji, inclusive emojis personalizados. Ficar offline, ou o status sumir por alguns instantes e voltar igual, não conta mais como mudança, e mudanças feitas com o seu Discord fechado aparecem quando você volta.", "VIP history › Profile: VIPs' custom status (the text people write on their profile) is logged again. It shows when they set, change or clear it, with the emoji, including custom emojis. Going offline, or the status vanishing for a moment and coming back the same, no longer counts as a change, and changes made while your Discord was closed show up when you're back."],
     ["new", "Histórico VIP › Perfil: registra quando o VIP define, muda ou remove o status personalizado (aquele texto que a pessoa escreve), mostrando o antes e o depois.", "VIP history › Profile: logs when a VIP sets, changes or clears their custom status (the text they write), showing the before and after."],
     ["improved", "Perfil do VIP: tocar na foto grande abre o perfil da pessoa no Discord.", "VIP page: tapping the large avatar opens the person's Discord profile."],
     ["improved", "Companhias de call: a lista é guardada pelo ID da conta, então continua certa mesmo que a pessoa troque de nome ou @. Quando ela troca, os nomes e @ anteriores aparecem do lado, em \"Também\".", "Call companions: the list is keyed by account ID, so it stays correct even if the person changes their name or @. When they do, their previous names and @ show next to them under \"Also\"."],
@@ -2671,6 +2671,58 @@ function onPresenceUpdates(a) {
 }
 const statusKey = (cs) => (cs ? `${cs.emojiId || cs.emoji || ""}\u0001${cs.text || ""}` : "");
 const getCsSnap = () => Data.load(k("vipCustomStatus")) || {};
+const CS_CONFIRM = 2 * 60000;
+const csPending = new Map();
+function csObserve(id, cur, away) {
+  const known = customStatusCache.has(id);
+  const prev = known ? customStatusCache.get(id) : undefined;
+  const pend = csPending.get(id);
+  if (!cur) {
+    if (pend) {
+      if (!pend.onlineSince) { pend.onlineSince = Date.now(); setTimeout(() => safe(() => csConfirm(id)), CS_CONFIRM + 1000); }
+      return null;
+    }
+    if (!known) { customStatusCache.set(id, null); return { save: true }; }
+    if (!prev) return null;
+    csPending.set(id, { prev, since: Date.now(), onlineSince: Date.now(), away: !!away });
+    setTimeout(() => safe(() => csConfirm(id)), CS_CONFIRM + 1000);
+    return null;
+  }
+  const base = pend ? pend.prev : prev;
+  csPending.delete(id);
+  customStatusCache.set(id, cur);
+  if (!known && !pend) return { save: true };
+  if (statusKey(base) === statusKey(cur)) return null;
+  return { save: true, ev: csEvent(id, base, cur, away || !!pend?.away) };
+}
+function csConfirm(id) {
+  const pend = csPending.get(id);
+  if (!pend?.onlineSince || Date.now() - pend.onlineSince < CS_CONFIRM) return;
+  if (!isOnlineStatus(rawPresence(id)?.status) || customStatusOf(id)) return;
+  csPending.delete(id);
+  customStatusCache.set(id, null);
+  const snap = getCsSnap(); snap[id] = null; Data.save(k("vipCustomStatus"), snap);
+  addProfileEvents([{ ...csEvent(id, pend.prev, null, pend.away), at: pend.since }]);
+}
+function cleanStatusFlicker() {
+  if (Data.load(k("csFlickerClean1"))) return;
+  const log = getProfileLog();
+  const drop = new Set();
+  const byUser = new Map();
+  log.forEach((e, i) => { if (e.field === "status") (byUser.get(e.userId) || byUser.set(e.userId, []).get(e.userId)).push(i); });
+  for (const idx of byUser.values()) {
+    const sorted = idx.slice().sort((a, b) => log[a].at - log[b].at);
+    for (let j = 0; j + 1 < sorted.length; j++) {
+      const a = log[sorted[j]], b = log[sorted[j + 1]];
+      if (drop.has(sorted[j])) continue;
+      const removed = (a.from || a.fromEmoji) && !a.to && !a.toEmoji;
+      const back = !b.from && !b.fromEmoji && (b.to || "") === (a.from || "") && (b.toEmoji || "") === (a.fromEmoji || "");
+      if (removed && back && b.at - a.at <= 3600000) { drop.add(sorted[j]); drop.add(sorted[j + 1]); j++; }
+    }
+  }
+  if (drop.size) { Data.save(k("vipProfileLog"), log.filter((_, i) => !drop.has(i))); profileBus.emit(); }
+  Data.save(k("csFlickerClean1"), Date.now());
+}
 const csEvent = (id, prev, cur, away) => ({ userId: id, at: Date.now(), field: "status", from: prev?.text || null, fromEmoji: prev?.emoji || null, fromEmojiId: prev?.emojiId || null, fromAnimated: !!prev?.animated, to: cur?.text || null, toEmoji: cur?.emoji || null, toEmojiId: cur?.emojiId || null, toAnimated: !!cur?.animated, away: !!away });
 const isOnlineStatus = (st) => !!st && st !== "offline";
 let seenCache = null;
@@ -2743,6 +2795,8 @@ const fmtSeenTitle = ({ kind, at, approx }) => approx && kind === "offline" ? L(
 function initPresenceCache() {
   presenceCache.clear();
   customStatusCache.clear();
+  csPending.clear();
+  safe(() => cleanStatusFlicker());
   const snap = getCsSnap();
   const evs = [];
   let changed = false;
@@ -2750,12 +2804,12 @@ function initPresenceCache() {
   for (const id of Object.keys(getVipList())) {
     const p = rawPresence(id);
     presenceCache.set(id, p);
+    if (id in snap) customStatusCache.set(id, snap[id]);
     if (isOnlineStatus(p?.status)) {
-      const cur = customStatusOf(id);
-      if (id in snap && statusKey(snap[id]) !== statusKey(cur)) evs.push(csEvent(id, snap[id], cur, true));
-      customStatusCache.set(id, cur);
-      if (!(id in snap) || statusKey(snap[id]) !== statusKey(cur)) { snap[id] = cur; changed = true; }
-    } else if (id in snap) customStatusCache.set(id, snap[id]);
+      const r = csObserve(id, customStatusOf(id), true);
+      if (r?.ev) evs.push(r.ev);
+      if (r?.save) { snap[id] = customStatusCache.get(id); changed = true; }
+    }
     safe(() => sample.push({ id: id.slice(-4), st: p?.status || null, types: (PresenceStore?.getActivities?.(id) || []).map((a) => a?.type), hasCs: !!customStatusOf(id) }));
   }
   if (changed) Data.save(k("vipCustomStatus"), snap);
@@ -2777,12 +2831,10 @@ function onPresenceChange() {
       const p = rawPresence(id);
       if (!p) continue;
       if (isOnlineStatus(p.status)) {
-        const prevCs = customStatusCache.has(id) ? customStatusCache.get(id) : undefined;
-        const curCs = customStatusOf(id);
-        if (prevCs !== undefined && statusKey(curCs) !== statusKey(prevCs)) statusEvs.push(csEvent(id, prevCs, curCs, false));
-        if (prevCs === undefined || statusKey(curCs) !== statusKey(prevCs)) csChanged.set(id, curCs);
-        customStatusCache.set(id, curCs);
-      }
+        const r = csObserve(id, customStatusOf(id), false);
+        if (r?.ev) statusEvs.push(r.ev);
+        if (r?.save) csChanged.set(id, customStatusCache.get(id));
+      } else { const pd = csPending.get(id); if (pd) pd.onlineSince = null; }
       const prev = presenceCache.get(id);
       presenceCache.set(id, p);
       if (!prev || prev.status === p.status) continue;
