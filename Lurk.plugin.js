@@ -2,7 +2,7 @@
  * @name Lurk
  * @author vtzr
  * @authorLink https://github.com/vtzr
- * @version 2.17.0
+ * @version 2.17.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vtzr/lurk-bd
  * @source https://github.com/vtzr/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.17.0";
+const VERSION = "2.17.1";
 const REPO = "vtzr/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.17.1", items: [
+    ["fixed", "Status personalizado dos VIPs: o status sumir quando a pessoa fica ausente ou vai ficar offline não conta mais como \"removeu o status\". Agora só é registrado quando ela fica 10 minutos online ou em não perturbar sem status, e os registros falsos de remover e voltar o mesmo status são apagados do histórico.", "VIPs' custom status: the status vanishing when the person goes idle or is about to go offline no longer counts as \"cleared their status\". It's only logged after they stay online or on do not disturb for 10 minutes without a status, and the false clear-and-restore entries are removed from the history."],
+  ] },
   { version: "2.17.0", items: [
     ["improved", "Calls dos VIPs em servidores que você não está olhando: o Lurk agora usa também o resumo que o Discord manda de tempos em tempos desses servidores, então percebe quando o VIP entra, sai ou troca de call, e quem entra e sai junto, sem você precisar abrir o servidor. Nesses casos a call mostra que as mudanças chegam com atraso.", "VIP calls in servers you aren't looking at: Lurk now also uses the summary Discord sends every so often for those servers, so it notices when the VIP joins, leaves or switches calls, and who joins and leaves with them, without you opening the server. In those cases the call shows that changes arrive with a delay."],
     ["new", "Calls dos VIPs: quando o VIP sai da call, o Lurk continua acompanhando o canal por mais 3 minutos e registra quem saiu logo em seguida e quanto tempo depois. Quem ficou aparece como \"continuou depois que saiu\".", "VIP calls: when the VIP leaves a call, Lurk keeps watching the channel for 3 more minutes and logs who left right after and how long later. Anyone who stayed shows as \"stayed after they left\"."],
@@ -2671,7 +2674,8 @@ function onPresenceUpdates(a) {
 }
 const statusKey = (cs) => (cs ? `${cs.emojiId || cs.emoji || ""}\u0001${cs.text || ""}` : "");
 const getCsSnap = () => Data.load(k("vipCustomStatus")) || {};
-const CS_CONFIRM = 2 * 60000;
+const CS_CONFIRM = 10 * 60000;
+const csSteady = (st) => st === "online" || st === "dnd";
 const csPending = new Map();
 function csObserve(id, cur, away) {
   const known = customStatusCache.has(id);
@@ -2698,14 +2702,14 @@ function csObserve(id, cur, away) {
 function csConfirm(id) {
   const pend = csPending.get(id);
   if (!pend?.onlineSince || Date.now() - pend.onlineSince < CS_CONFIRM) return;
-  if (!isOnlineStatus(rawPresence(id)?.status) || customStatusOf(id)) return;
+  if (!csSteady(rawPresence(id)?.status) || customStatusOf(id)) return;
   csPending.delete(id);
   customStatusCache.set(id, null);
   const snap = getCsSnap(); snap[id] = null; Data.save(k("vipCustomStatus"), snap);
   addProfileEvents([{ ...csEvent(id, pend.prev, null, pend.away), at: pend.since }]);
 }
 function cleanStatusFlicker() {
-  if (Data.load(k("csFlickerClean1"))) return;
+  if (Data.load(k("csFlickerClean2"))) return;
   const log = getProfileLog();
   const drop = new Set();
   const byUser = new Map();
@@ -2717,11 +2721,11 @@ function cleanStatusFlicker() {
       if (drop.has(sorted[j])) continue;
       const removed = (a.from || a.fromEmoji) && !a.to && !a.toEmoji;
       const back = !b.from && !b.fromEmoji && (b.to || "") === (a.from || "") && (b.toEmoji || "") === (a.fromEmoji || "");
-      if (removed && back && b.at - a.at <= 3600000) { drop.add(sorted[j]); drop.add(sorted[j + 1]); j++; }
+      if (removed && back && b.at - a.at <= 12 * 3600000) { drop.add(sorted[j]); drop.add(sorted[j + 1]); j++; }
     }
   }
   if (drop.size) { Data.save(k("vipProfileLog"), log.filter((_, i) => !drop.has(i))); profileBus.emit(); }
-  Data.save(k("csFlickerClean1"), Date.now());
+  Data.save(k("csFlickerClean2"), Date.now());
 }
 const csEvent = (id, prev, cur, away) => ({ userId: id, at: Date.now(), field: "status", from: prev?.text || null, fromEmoji: prev?.emoji || null, fromEmojiId: prev?.emojiId || null, fromAnimated: !!prev?.animated, to: cur?.text || null, toEmoji: cur?.emoji || null, toEmojiId: cur?.emojiId || null, toAnimated: !!cur?.animated, away: !!away });
 const isOnlineStatus = (st) => !!st && st !== "offline";
@@ -2805,8 +2809,9 @@ function initPresenceCache() {
     const p = rawPresence(id);
     presenceCache.set(id, p);
     if (id in snap) customStatusCache.set(id, snap[id]);
-    if (isOnlineStatus(p?.status)) {
-      const r = csObserve(id, customStatusOf(id), true);
+    const cur0 = isOnlineStatus(p?.status) ? customStatusOf(id) : null;
+    if (cur0 || csSteady(p?.status)) {
+      const r = csObserve(id, cur0, true);
       if (r?.ev) evs.push(r.ev);
       if (r?.save) { snap[id] = customStatusCache.get(id); changed = true; }
     }
@@ -2830,8 +2835,9 @@ function onPresenceChange() {
     for (const id of Object.keys(list)) {
       const p = rawPresence(id);
       if (!p) continue;
-      if (isOnlineStatus(p.status)) {
-        const r = csObserve(id, customStatusOf(id), false);
+      const curCs = isOnlineStatus(p.status) ? customStatusOf(id) : null;
+      if (curCs || csSteady(p.status)) {
+        const r = csObserve(id, curCs, false);
         if (r?.ev) statusEvs.push(r.ev);
         if (r?.save) csChanged.set(id, customStatusCache.get(id));
       } else { const pd = csPending.get(id); if (pd) pd.onlineSince = null; }
